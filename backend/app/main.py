@@ -1,9 +1,11 @@
 from fastapi import FastAPI
+from app.api.invoices import router as invoice_router
 
+app = FastAPI(title="AgentForge API", version="0.1.0")
 
-app = FastAPI(title="AgentForge")
+app.include_router(invoice_router)
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health():
     return {"status": "ok", "service": "agentforge"}
