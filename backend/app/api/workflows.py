@@ -42,6 +42,7 @@ def execution_response(db: Session, execution: WorkflowExecution):
         "execution_id": execution.id,
         "workflow_id": execution.workflow_id,
         "status": execution.status,
+        "current_step": execution.current_step,
         "context": execution.context,
         "steps": [
             {"step_id": step.step_id, "status": step.status, "result": step.result}
@@ -69,8 +70,13 @@ def run_workflow(
     ))
     if existing:
         return replay(existing)
-    if db.get(Workflow, workflow_id) is None:
+    workflow = db.get(Workflow, workflow_id)
+    if workflow is None:
         raise HTTPException(404, "Workflow not found")
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except ValueError:
+        raise HTTPException(422, "Stored workflow does not match the current workflow contract")
     if db.get(Invoice, payload.invoice_id) is None:
         raise HTTPException(404, "Invoice not found")
 
@@ -91,7 +97,7 @@ def run_workflow(
             raise
         return replay(existing)
     db.refresh(execution)
-    return execution_response(db, execute_workflow(db, execution))
+    return execution_response(db, execute_workflow(db, execution, definition))
 
 
 @router.get("/executions/{execution_id}")

@@ -44,7 +44,8 @@ def test_workflow_execution_and_idempotency():
                             {"id": "validate_invoice", "type": "tool",
                              "tool": "invoice.validate"},
                             {"id": "check_validity", "type": "condition",
-                             "field": "valid", "operator": "equals", "value": False},
+                             "field": "valid", "operator": "equals", "value": False,
+                             "on_true": "__end__", "on_false": "__end__"},
                         ],
                     })
                     assert created.status_code == 201
@@ -57,7 +58,7 @@ def test_workflow_execution_and_idempotency():
                     assert execution["status"] == "COMPLETED"
                     assert execution["context"] == {
                         "valid": False, "issues": ["AMOUNT_DISCREPANCY"],
-                        "discrepancy_percentage": "15.00", "condition_matched": True,
+                        "discrepancy_percentage": 15.0, "condition_matched": True,
                     }
                     assert [step["step_id"] for step in execution["steps"]] == [
                         "validate_invoice", "check_validity"
