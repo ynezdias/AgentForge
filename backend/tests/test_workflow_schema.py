@@ -10,10 +10,13 @@ def test_false_condition_value_is_allowed():
         "steps": [
             {"id": "validate", "type": "tool", "tool": "invoice.validate"},
             {"id": "check", "type": "condition", "field": "valid",
-             "operator": "equals", "value": False},
+             "operator": "equals", "value": False,
+             "on_true": "approve", "on_false": "__end__"},
+            {"id": "approve", "type": "approval", "role": "manager"},
         ],
     })
     assert definition.steps[1].value is False
+    assert len(definition.steps) == 3
 
 
 @pytest.mark.parametrize("steps", [
@@ -28,3 +31,32 @@ def test_false_condition_value_is_allowed():
 def test_unsupported_or_invalid_workflows_are_rejected(steps):
     with pytest.raises(ValidationError):
         WorkflowDefinition.model_validate({"name": "Invalid", "steps": steps})
+
+
+@pytest.mark.parametrize("target", ["missing", "check", "validate"])
+def test_unknown_or_backward_branch_rejected(target):
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate({
+            "name": "Invalid branch",
+            "steps": [
+                {"id": "validate", "type": "tool", "tool": "invoice.validate"},
+                {"id": "check", "type": "condition", "field": "valid",
+                 "operator": "equals", "value": False,
+                 "on_true": target, "on_false": "__end__"},
+            ],
+        })
+
+
+def test_approval_requires_role():
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate({"name": "Invalid", "steps": [
+            {"id": "approve", "type": "approval"},
+        ]})
+
+
+def test_multiple_approval_steps_rejected():
+    with pytest.raises(ValidationError):
+        WorkflowDefinition.model_validate({"name": "Invalid", "steps": [
+            {"id": "approve1", "type": "approval", "role": "manager"},
+            {"id": "approve2", "type": "approval", "role": "manager"},
+        ]})

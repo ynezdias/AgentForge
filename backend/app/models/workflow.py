@@ -57,6 +57,12 @@ class WorkflowExecution(Base):
         String(30), default="PENDING", nullable=False
     )
 
+    current_step: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
     input_data: Mapped[dict] = mapped_column(
         JSONB, default=dict, nullable=False
     )
@@ -108,4 +114,24 @@ class StepExecution(Base):
             "execution_id", "step_id",
             name="uq_execution_step"
         ),
+    )
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    execution_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workflow_executions.id"),
+        unique=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(30), default="PENDING", nullable=False)
+    requested_role: Mapped[str] = mapped_column(
+        String(30), default="manager", nullable=False
+    )
+    decided_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
     )
