@@ -8,6 +8,7 @@ from alembic import context
 from app.db.session import Base, settings
 from app.models.business import Vendor, PurchaseOrder, Invoice
 from app.models.workflow import Workflow, WorkflowExecution, StepExecution, ApprovalRequest
+from app.models.investigation import InvoiceInvestigation
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
