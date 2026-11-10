@@ -15,6 +15,7 @@ from app.models.workflow import ApprovalRequest, StepExecution, Workflow, Workfl
 from app.schemas.workflow import WorkflowDefinition
 from app.services.workflow_engine import execute_workflow
 from app.services.audit import record_audit_event
+from app.services.execution_lock import acquire_execution_lock
 
 
 router = APIRouter(prefix="/api/v1/approvals", tags=["Approvals"])
@@ -35,6 +36,8 @@ def require_demo_manager(x_demo_manager_token: str | None = Header(default=None)
 def decide_approval(
     execution_id: uuid.UUID, payload: ApprovalDecision, db: Session = Depends(get_db)
 ):
+    if not acquire_execution_lock(db, execution_id):
+        raise HTTPException(409, "Execution is busy; try again later")
     execution = db.scalar(select(WorkflowExecution).where(
         WorkflowExecution.id == execution_id
     ).with_for_update())

@@ -3,6 +3,7 @@ from fastapi.encoders import jsonable_encoder
 from app.schemas.investigation import InvestigationResult
 from app.services.investigation_agent import investigation_graph
 from app.services.invoice_validation import validate_invoice
+from app.services.retry_policy import invoke_ai_with_retry
 
 
 def investigate_invoice_tool(invoice, purchase_order):
@@ -22,7 +23,7 @@ def investigate_invoice_tool(invoice, purchase_order):
         "policy_threshold_percentage": "5",
     }
     try:
-        output = investigation_graph.invoke({"invoice_facts": facts})
+        output = invoke_ai_with_retry(investigation_graph, facts)
         recommendation = InvestigationResult.model_validate(output["investigation"])
     except Exception:
         # Provider exceptions can include credentials or request data. The

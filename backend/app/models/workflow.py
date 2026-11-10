@@ -58,6 +58,8 @@ class WorkflowExecution(Base):
     )
 
     current_step: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Reserved for a future claim/retry mechanism, not an accurate retry metric.
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
@@ -104,6 +106,7 @@ class StepExecution(Base):
     status: Mapped[str] = mapped_column(
         String(30), nullable=False
     )
+    attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     result: Mapped[dict] = mapped_column(
         JSONB, default=dict, nullable=False
