@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.models.workflow import ApprovalRequest, StepExecution, Workflow, WorkflowExecution
 from app.schemas.workflow import WorkflowDefinition
 from app.services.workflow_engine import execute_workflow
+from app.services.audit import record_audit_event
 
 
 router = APIRouter(prefix="/api/v1/approvals", tags=["Approvals"])
@@ -70,6 +71,17 @@ def decide_approval(
     approval_step.result = {"decision": payload.decision, "decided_by": "demo-manager"}
     execution.context = {**dict(execution.context or {}), "approved": approved}
     execution.status = "RUNNING" if approved else "REJECTED"
+    record_audit_event(db, execution.id, "APPROVAL_DECIDED", {
+        "decision": payload.decision, "decided_by": approval.decided_by,
+        "approval_id": approval.id,
+        "scope": "workflow review-status action",
+    })
+    record_audit_event(db, execution.id, "STEP_COMPLETED" if approved else "STEP_REJECTED", {
+        "step_id": approval_step.step_id, "result": approval_step.result,
+    })
+    record_audit_event(db, execution.id, "EXECUTION_STATE_CHANGED", {
+        "from": "WAITING_APPROVAL", "to": execution.status,
+    })
     db.commit()
     if approved:
         execution = execute_workflow(db, execution, definition)

@@ -11,6 +11,7 @@ from app.models.business import Invoice
 from app.models.workflow import Workflow, WorkflowExecution, StepExecution
 from app.schemas.workflow import WorkflowDefinition
 from app.services.workflow_engine import execute_workflow
+from app.services.audit import record_audit_event
 
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["Workflows"])
@@ -87,6 +88,10 @@ def run_workflow(
     )
     db.add(execution)
     try:
+        db.flush()
+        record_audit_event(db, execution.id, "EXECUTION_STATE_CHANGED", {
+            "from": None, "to": "PENDING",
+        })
         db.commit()
     except IntegrityError:
         db.rollback()
