@@ -13,6 +13,9 @@ from app.db.session import engine, get_db
 from app.main import app
 from app.models.business import Invoice, PurchaseOrder, Vendor
 from app.models.workflow import ApprovalRequest, WorkflowExecution
+from app.models.audit import AuditEvent
+from app.models.investigation import InvoiceInvestigation
+from app.services import ai_tools
 
 
 pytestmark = pytest.mark.skipif(
@@ -153,3 +156,156 @@ def test_missing_condition_input_fails_without_resolution(demo):
     assert execution["status"] == "FAILED"
     assert "unavailable" in execution["context"]["error"]
     assert execution["current_step"] == 0
+
+
+AI_DEFINITION = {
+    "name": "AI Invoice Exception Resolution",
+    "steps": [
+        {"id": "validate", "type": "tool", "tool": "invoice.validate"},
+        {"id": "check", "type": "condition", "field": "valid",
+         "operator": "equals", "value": False,
+         "on_true": "investigate", "on_false": "__end__"},
+        {"id": "investigate", "type": "tool", "tool": "invoice.investigate"},
+        {"id": "approval", "type": "approval", "role": "manager"},
+        {"id": "resolve", "type": "tool", "tool": "invoice.resolve"},
+    ],
+}
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_ai_workflow_persistence_and_audit(demo, monkeypatch, decision):
+    client, db, invoices = demo
+    calls = []
+    recommendation = {
+        "summary": "15% discrepancy", "risk_level": "HIGH",
+        "recommended_action": "REQUEST_CORRECTION", "reasoning": "Exceeds tolerance",
+        "requires_human_approval": True,
+    }
+
+    class FakeGraph:
+        def invoke(self, state):
+            calls.append(state)
+            return {"investigation": recommendation}
+
+    monkeypatch.setattr(ai_tools, "investigation_graph", FakeGraph())
+    execution, url, headers, payload = start(client, invoices[1], AI_DEFINITION)
+    execution_id = UUID(execution["execution_id"])
+    assert execution["status"] == "WAITING_APPROVAL"
+    assert execution["current_step"] == 4
+    assert execution["context"]["ai_recommendation"] == recommendation
+    row = db.scalar(select(InvoiceInvestigation).where(
+        InvoiceInvestigation.invoice_id == invoices[1].id
+    ))
+    assert row.result["execution_id"] == str(execution_id)
+    assert row.result["facts"]["validation"]["discrepancy_percentage"] == 15.0
+    assert row.result["recommendation"] == recommendation
+
+    def events():
+        return list(db.scalars(select(AuditEvent).where(
+            AuditEvent.execution_id == execution_id
+        ).order_by(AuditEvent.created_at)))
+
+    before = events()
+    assert all(event.created_at is not None for event in before)
+    assert [event.payload["to"] for event in before
+            if event.event_type == "EXECUTION_STATE_CHANGED"] == [
+                "PENDING", "RUNNING", "WAITING_APPROVAL"
+            ]
+    assert any(event.event_type == "STEP_COMPLETED"
+               and event.payload["step_id"] == "investigate" for event in before)
+    assert client.post(url, headers=headers, json=payload).json() == execution
+    assert len(events()) == len(before)
+    approved = client.post(f"/api/v1/approvals/{execution_id}", headers=MANAGER,
+                           json={"decision": decision})
+    assert approved.status_code == 200
+    assert approved.json()["status"] == ("COMPLETED" if decision == "approve" else "REJECTED")
+    db.refresh(invoices[1])
+    assert invoices[1].status == ("review_approved" if decision == "approve" else "pending")
+    assert invoices[1].amount == Decimal("1150.00")
+    history = events()
+    decisions = [event for event in history if event.event_type == "APPROVAL_DECIDED"]
+    assert len(decisions) == 1
+    assert decisions[0].payload["decision"] == decision
+    assert decisions[0].payload["scope"] == "workflow review-status action"
+    assert history[-1].payload["to"] == approved.json()["status"]
+    assert client.post(f"/api/v1/approvals/{execution_id}", headers=MANAGER,
+                       json={"decision": decision}).status_code == 409
+    assert len(events()) == len(history)
+    assert len(calls) == 1
+
+
+def test_valid_ai_workflow_bypasses_investigation(demo, monkeypatch):
+    client, db, invoices = demo
+
+    class NoCalls:
+        def invoke(self, state):
+            pytest.fail("Valid invoice must bypass investigation")
+
+    monkeypatch.setattr(ai_tools, "investigation_graph", NoCalls())
+    execution, _, _, _ = start(client, invoices[0], AI_DEFINITION)
+    assert execution["status"] == "COMPLETED"
+    assert len(execution["steps"]) == 2
+    assert db.scalar(select(InvoiceInvestigation).where(
+        InvoiceInvestigation.invoice_id == invoices[0].id
+    )) is None
+
+
+def test_ai_failure_records_failure_without_investigation(demo, monkeypatch):
+    client, db, invoices = demo
+
+    class FailedGraph:
+        def invoke(self, state):
+            raise RuntimeError("private-provider-secret")
+
+    monkeypatch.setattr(ai_tools, "investigation_graph", FailedGraph())
+    execution, _, _, _ = start(client, invoices[1], AI_DEFINITION)
+    assert execution["status"] == "FAILED"
+    assert execution["current_step"] == 2
+    assert execution["context"]["error"] == "AI investigation failed"
+    assert len(execution["steps"]) == 2
+    assert db.scalar(select(InvoiceInvestigation).where(
+        InvoiceInvestigation.invoice_id == invoices[1].id
+    )) is None
+    history = db.scalars(select(AuditEvent).where(
+        AuditEvent.execution_id == UUID(execution["execution_id"])
+    )).all()
+    assert any(event.payload.get("to") == "FAILED" for event in history)
+    assert "private-provider-secret" not in str([event.payload for event in history])
+    assert invoices[1].status == "pending"
+
+
+def test_investigation_and_step_roll_back_if_audit_write_fails(demo, monkeypatch):
+    from app.services import workflow_engine
+
+    client, db, invoices = demo
+
+    class FakeGraph:
+        def invoke(self, state):
+            return {"investigation": {
+                "summary": "15% discrepancy", "risk_level": "HIGH",
+                "recommended_action": "REQUEST_CORRECTION", "reasoning": "Outside tolerance",
+                "requires_human_approval": True,
+            }}
+
+    original = workflow_engine.record_audit_event
+
+    def fail_investigation_audit(db, execution_id, event_type, payload):
+        if event_type == "STEP_COMPLETED" and payload.get("step_id") == "investigate":
+            raise RuntimeError("Simulated audit write failure")
+        return original(db, execution_id, event_type, payload)
+
+    monkeypatch.setattr(ai_tools, "investigation_graph", FakeGraph())
+    monkeypatch.setattr(workflow_engine, "record_audit_event", fail_investigation_audit)
+    execution, _, _, _ = start(client, invoices[1], AI_DEFINITION)
+    assert execution["status"] == "FAILED"
+    assert execution["current_step"] == 2
+    assert len(execution["steps"]) == 2
+    assert "ai_recommendation" not in execution["context"]
+    assert db.scalar(select(InvoiceInvestigation).where(
+        InvoiceInvestigation.invoice_id == invoices[1].id
+    )) is None
+    history = db.scalars(select(AuditEvent).where(
+        AuditEvent.execution_id == UUID(execution["execution_id"])
+    )).all()
+    assert not any(event.payload.get("step_id") == "investigate" for event in history)
+    assert any(event.payload.get("to") == "FAILED" for event in history)
