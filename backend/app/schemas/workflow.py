@@ -8,7 +8,7 @@ class WorkflowStep(BaseModel):
 
     id: str = Field(min_length=1, max_length=100)
     type: Literal["tool", "condition", "approval"]
-    tool: Literal["invoice.validate", "invoice.resolve"] | None = None
+    tool: Literal["invoice.validate", "invoice.investigate", "invoice.resolve"] | None = None
     field: Literal["valid"] | None = None
     operator: Literal["equals"] | None = None
     value: bool | None = None
