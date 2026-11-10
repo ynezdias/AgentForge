@@ -1,4 +1,4 @@
-"""Synchronous local MVP; do not execute the same execution concurrently.
+"""Synchronous local MVP with transaction locks around each state transition.
 
 Steps and their cursor are committed together. There is no execution claiming or
 durable resume job, so this does not provide crash-safe worker recovery.
@@ -18,11 +18,16 @@ from app.schemas.workflow import WorkflowDefinition
 from app.services.invoice_validation import validate_invoice
 from app.services.ai_tools import investigate_invoice_tool
 from app.services.audit import record_audit_event
+from app.services.execution_lock import acquire_execution_lock
 
 
 def execute_workflow(
     db: Session, execution: WorkflowExecution, definition: WorkflowDefinition
 ):
+    if not acquire_execution_lock(db, execution.id):
+        db.refresh(execution)
+        return execution
+    db.refresh(execution)
     if execution.status not in ("PENDING", "RUNNING"):
         return execution
     steps = definition.steps
@@ -37,11 +42,22 @@ def execute_workflow(
                 "from": previous_status, "to": execution.status,
             })
         db.commit()
-        invoice = db.get(Invoice, uuid.UUID(execution.input_data["invoice_id"]))
-        if invoice is None:
-            raise ValueError("Invoice not found")
-
-        while cursor < len(steps):
+        while True:
+            # A step commit releases the transaction advisory lock. Reacquire
+            # and reload before reading the cursor or invoking business logic.
+            if not acquire_execution_lock(db, execution.id):
+                db.refresh(execution)
+                return execution
+            db.refresh(execution)
+            if execution.status != "RUNNING":
+                return execution
+            cursor = execution.current_step
+            context = dict(execution.context or {})
+            if cursor >= len(steps):
+                break
+            invoice = db.get(Invoice, uuid.UUID(execution.input_data["invoice_id"]))
+            if invoice is None:
+                raise ValueError("Invoice not found")
             step = steps[cursor]
             next_cursor = cursor + 1
             if step.type == "tool" and step.tool == "invoice.validate":
@@ -123,6 +139,14 @@ def execute_workflow(
         db.commit()
     except Exception as exc:
         db.rollback()
+        # Rollback released the lock too. Do not overwrite progress made by
+        # another caller after the failed transaction ended.
+        if not acquire_execution_lock(db, execution.id):
+            db.refresh(execution)
+            return execution
+        db.refresh(execution)
+        if execution.status not in ("PENDING", "RUNNING") or execution.current_step != cursor:
+            return execution
         previous_status = execution.status
         execution.status = "FAILED"
         execution.context = {**dict(execution.context or {}), "error": str(exc)}

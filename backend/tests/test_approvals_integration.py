@@ -309,3 +309,56 @@ def test_investigation_and_step_roll_back_if_audit_write_fails(demo, monkeypatch
     )).all()
     assert not any(event.payload.get("step_id") == "investigate" for event in history)
     assert any(event.payload.get("to") == "FAILED" for event in history)
+
+
+@pytest.mark.parametrize("different_input", [False, True])
+def test_idempotency_unique_constraint_race(demo, monkeypatch, different_input):
+    client, db, invoices = demo
+    execution, url, headers, payload = start(client, invoices[1])
+    original_scalar = db.scalar
+    calls = 0
+
+    def miss_initial_lookup(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            # Simulate the initial lookup racing with a committed insertion.
+            return None
+        return original_scalar(*args, **kwargs)
+
+    monkeypatch.setattr(db, "scalar", miss_initial_lookup)
+    if different_input:
+        payload = {"invoice_id": str(invoices[0].id)}
+    replay = client.post(url, headers=headers, json=payload)
+    assert replay.status_code == (409 if different_input else 200)
+    if not different_input:
+        assert replay.json() == execution
+
+
+def test_engine_cannot_advance_locked_execution(demo):
+    from app.models.workflow import Workflow
+    from app.schemas.workflow import WorkflowDefinition
+    from app.services.execution_lock import acquire_execution_lock
+    from app.services.workflow_engine import execute_workflow
+
+    _, db, invoices = demo
+    definition = WorkflowDefinition.model_validate({"name": "Locked execution", "steps": [
+        {"id": "validate", "type": "tool", "tool": "invoice.validate"},
+    ]})
+    workflow = Workflow(name=definition.name, definition=definition.model_dump())
+    db.add(workflow)
+    db.flush()
+    execution = WorkflowExecution(workflow_id=workflow.id,
+                                  input_data={"invoice_id": str(invoices[0].id)},
+                                  idempotency_key=str(uuid4()))
+    db.add(execution)
+    db.commit()
+    with Session(engine) as other:
+        assert acquire_execution_lock(other, execution.id)
+        blocked = execute_workflow(db, execution, definition)
+        assert blocked.status == "PENDING"
+        assert blocked.current_step == 0
+        other.rollback()
+    completed = execute_workflow(db, execution, definition)
+    assert completed.status == "COMPLETED"
+    assert completed.current_step == 1

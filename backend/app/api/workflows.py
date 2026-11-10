@@ -99,7 +99,7 @@ def run_workflow(
             WorkflowExecution.idempotency_key == idempotency_key
         ))
         if existing is None:
-            raise
+            raise HTTPException(409, "Execution creation conflict") from None
         return replay(existing)
     db.refresh(execution)
     return execution_response(db, execute_workflow(db, execution, definition))
