@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Activity, AlertCircle, ArrowUpRight, Box, FileText, GitBranch, LayoutDashboard, RefreshCw, ShieldCheck } from "lucide-react";
 import { api, type Invoice, type Workflow } from "@/lib/api";
 
@@ -24,7 +25,20 @@ export default function Dashboard() {
     }
   }
 
-  useEffect(() => { void loadData(); }, []);
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.getInvoices(), api.getWorkflows()])
+      .then(([invoiceData, workflowData]) => {
+        if (!active) return;
+        setInvoices(invoiceData);
+        setWorkflows(workflowData);
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   const stats = [
     { label: "Invoices", value: invoices.length, icon: FileText, note: "Invoice records loaded" },
@@ -41,12 +55,12 @@ export default function Dashboard() {
           </div>
           <p className="mb-4 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">Workspace</p>
           <nav aria-label="Main navigation" className="space-y-2 text-sm">
-            <a href="/" aria-current="page" className="flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-3 font-medium text-blue-400"><LayoutDashboard size={18} />Dashboard</a>
-            {[{ label: "Invoices", icon: FileText }, { label: "Workflows", icon: GitBranch }, { label: "Approvals", icon: ShieldCheck }].map(({ label, icon: Icon }) => (
-              <div key={label} aria-disabled="true" className="flex items-center gap-3 px-3 py-3 text-slate-500"><Icon size={18} />{label}</div>
+            <Link href="/" aria-current="page" className="flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-3 font-medium text-blue-400"><LayoutDashboard size={18} />Dashboard</Link>
+            {[{ label: "Invoices", href: "/invoices", icon: FileText }, { label: "Workflows", href: "/workflows", icon: GitBranch }].map(({ label, href, icon: Icon }) => (
+              <Link key={label} href={href} className="flex items-center gap-3 rounded-lg px-3 py-3 text-slate-400 hover:bg-slate-800 hover:text-white"><Icon size={18} />{label}</Link>
             ))}
           </nav>
-          <p className="mt-4 px-3 text-xs leading-5 text-slate-500">Additional screens are coming next.</p>
+          <p className="mt-4 px-3 text-xs leading-5 text-slate-500">Run workflows and review approvals in Invoice Operations.</p>
           <div className="mt-auto border-t border-slate-800 pt-6 text-xs text-slate-500"><span className="mr-2 inline-block h-2 w-2 rounded-full bg-blue-400" />Local development</div>
         </aside>
 
@@ -56,6 +70,7 @@ export default function Dashboard() {
             <span className="rounded-md border border-slate-800 px-2 py-1 uppercase tracking-widest">Development</span>
           </div>
           <div className="mx-auto max-w-7xl p-6 md:p-10 lg:p-12">
+            <nav aria-label="Mobile navigation" className="mb-6 flex gap-5 text-sm text-blue-400 md:hidden"><Link href="/" aria-current="page">Dashboard</Link><Link href="/invoices">Invoices</Link><Link href="/workflows">Workflows</Link></nav>
             <header className="mb-10 flex items-start justify-between gap-4">
               <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">Workspace overview</p>
                 <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Operations Dashboard</h1>
