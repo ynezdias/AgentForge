@@ -1,6 +1,56 @@
 
 # AgentForge
 
+## Run with Docker Compose
+
+Copy `.env.example` to `.env` in the repository root, then replace its password
+and Gemini key placeholders. Use a strong URL-safe database password (letters,
+digits, `-`, `_`) because it is interpolated into `DATABASE_URL`. Real `.env`
+files are ignored by Git and excluded from Docker build contexts.
+
+```powershell
+docker compose up --build -d
+docker compose exec backend alembic upgrade head
+docker compose ps
+```
+
+Open the dashboard at http://localhost:3000, health at
+http://localhost:8000/health, and Swagger at http://localhost:8000/docs.
+Stop local development servers on ports 3000 and 8000 before starting Compose.
+The Next.js production server proxies API requests to `http://backend:8000`;
+PostgreSQL is accessible only on the Compose network.
+
+Compose creates its own `postgres_data` volume. It does **not** reuse or delete
+the original standalone `agentforge-postgres` database. The new database is
+empty after migration; sample records can be added explicitly with:
+
+```powershell
+docker compose exec backend python -m app.db.seed
+```
+
+Workflow definitions must also be created through the API before they can be
+selected in Invoice Operations. Gemini access is independent of container
+health; a reachable dashboard does not verify live model connectivity.
+
+```powershell
+docker compose logs --tail=50 backend frontend
+docker compose down
+docker compose up -d
+```
+
+`down` preserves database data. Do not pass `-v` unless deleting that data is
+intentional. Workflow logs are JSON with execution/step IDs and statuses, not
+invoice documents or AI prompts. Exception logs include the exception class
+without raw exception content. Credentials stay in the runtime environment,
+not the images; anyone with Docker administrator access can inspect container
+environments.
+
+GitHub Actions runs backend migrations and all database tests against an
+ephemeral PostgreSQL service with mocked Gemini, then frontend lint/build in a
+separate job. CI uses test-only credentials, never your local Gemini key.
+The workflow runs after pushing the files or opening a pull request; adding it
+locally does not start a GitHub run or deploy to a public host.
+
 ### From business requirements to executable AI workflows.
 
 AgentForge is an AI-powered enterprise workflow automation platform that transforms natural-language business requirements into structured, validated, and executable workflows.
