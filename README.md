@@ -17,8 +17,14 @@ docker compose ps
 Open the dashboard at http://localhost:3000, health at
 http://localhost:8000/health, and Swagger at http://localhost:8000/docs.
 Stop local development servers on ports 3000 and 8000 before starting Compose.
+If Windows reserves port 8000, set `BACKEND_PORT=18000` in the root `.env` and
+use http://localhost:18000/health and http://localhost:18000/docs instead.
+This changes only the host port; the frontend proxy continues to use the
+backend service's internal port 8000.
 The Next.js production server proxies API requests to `http://backend:8000`;
 PostgreSQL is accessible only on the Compose network.
+The frontend Docker image uses Next.js standalone output and runs as the
+unprivileged `node` user. Build dependencies stay in the builder stage.
 
 Compose creates its own `postgres_data` volume. It does **not** reuse or delete
 the original standalone `agentforge-postgres` database. The new database is

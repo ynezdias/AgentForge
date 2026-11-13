@@ -5,6 +5,7 @@ durable resume job, so this does not provide crash-safe worker recovery.
 """
 
 import uuid
+import logging
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
@@ -20,6 +21,14 @@ from app.services.ai_tools import investigate_invoice_tool
 from app.services.audit import record_audit_event
 from app.services.execution_lock import acquire_execution_lock
 
+logger = logging.getLogger(__name__)
+
+
+def log_state(execution, event, step_id=None):
+    fields = {"execution_id": execution.id, "status": execution.status, "event": event}
+    if step_id is not None:
+        fields["step_id"] = step_id
+    logger.info(event, extra=fields)
 
 def execute_workflow(
     db: Session, execution: WorkflowExecution, definition: WorkflowDefinition
@@ -42,6 +51,7 @@ def execute_workflow(
                 "from": previous_status, "to": execution.status,
             })
         db.commit()
+        log_state(execution, "workflow_execution_started")
         while True:
             # A step commit releases the transaction advisory lock. Reacquire
             # and reload before reading the cursor or invoking business logic.
@@ -115,6 +125,7 @@ def execute_workflow(
                     "from": "RUNNING", "to": "WAITING_APPROVAL",
                 })
                 db.commit()
+                log_state(execution, "workflow_waiting_approval", step.id)
                 db.refresh(execution)
                 return execution
             else:
@@ -130,6 +141,7 @@ def execute_workflow(
                 "step_id": step.id, "result": result, "current_step": next_cursor,
             })
             db.commit()
+            log_state(execution, "workflow_step_completed", step.id)
             cursor = next_cursor
 
         execution.status = "COMPLETED"
@@ -137,6 +149,7 @@ def execute_workflow(
             "from": "RUNNING", "to": "COMPLETED",
         })
         db.commit()
+        log_state(execution, "workflow_execution_completed")
     except Exception as exc:
         db.rollback()
         # Rollback released the lock too. Do not overwrite progress made by
@@ -155,5 +168,6 @@ def execute_workflow(
             "current_step": execution.current_step,
         })
         db.commit()
+        log_state(execution, "workflow_execution_failed")
     db.refresh(execution)
     return execution

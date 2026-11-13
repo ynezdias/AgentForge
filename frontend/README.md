@@ -4,8 +4,10 @@ Next.js App Router, TypeScript, Tailwind CSS, Lucide, and React Flow.
 
 ## Run locally
 
-Start PostgreSQL and FastAPI from `backend` first. The frontend's ignored
-`.env.local` contains `BACKEND_URL=http://127.0.0.1:8000`.
+Start the backend first. Point the ignored `.env.local` at its host URL:
+`BACKEND_URL=http://127.0.0.1:18000` for the current Compose setup, or port 8000
+for a standalone backend using the default port. Inside Compose the proxy uses
+the backend service's internal port 8000 automatically.
 
 From this directory:
 
@@ -29,10 +31,19 @@ after changing it. Counts describe loaded records (each backend list is capped
 at 100), not global database totals. Invoice status is the persisted business
 status; it is not the deterministic validation result.
 
-The dashboard links to `/invoices` for invoice/workflow selection, execution
-results, AI recommendations, manager decisions, and recorded step history.
-`/workflows` displays a static React Flow process diagram; it does not read live
-workflow definitions or execution status. Page links are available on mobile.
+Every page shares navigation. `/invoices` contains a searchable supplier queue,
+purchase-order comparisons, deterministic validation, and workflow execution.
+Execution URLs survive page reloads. `/approvals` lists waiting requests and
+past decisions with recorded steps and audit history. `/workflows` renders
+the saved workflow definitions, including condition branches, in React Flow.
+
+An empty workspace offers an explicit Load sample workspace action. This is
+enabled only when the backend's `ENABLE_DEMO_SETUP=true` flag is set (as in the
+local Compose file) and requires the demo manager header. Setup is idempotent;
+it preserves existing records and adds sample invoices and two workflows:
+Invoice Exception Review (rules and human review) and AI Invoice Exception
+Resolution (Gemini, rules, and human review). AI failures stay visible; the
+application never substitutes a fabricated recommendation.
 
 Approval authorizes the workflow's review-status action; it does not change
 invoice amounts, send payments, or carry out the AI recommendation. The local

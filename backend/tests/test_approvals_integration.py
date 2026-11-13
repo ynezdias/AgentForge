@@ -362,3 +362,44 @@ def test_engine_cannot_advance_locked_execution(demo):
     completed = execute_workflow(db, execution, definition)
     assert completed.status == "COMPLETED"
     assert completed.current_step == 1
+
+
+def test_workspace_lists_invoice_facts_and_saved_execution_history(demo):
+    client, _, invoices = demo
+    listing = client.get("/api/v1/invoices")
+    assert listing.status_code == 200
+    invoice = next(item for item in listing.json() if item["id"] == str(invoices[1].id))
+    assert invoice["vendor_name"] == "Approval test"
+    assert Decimal(invoice["purchase_order_amount"]) == Decimal("1000")
+    assert invoice["validation"]["valid"] is False
+    assert Decimal(str(invoice["validation"]["discrepancy_percentage"])) == Decimal("15")
+    execution, _, _, _ = start(client, invoices[1])
+    history = client.get("/api/v1/workflows/executions", params={
+        "invoice_id": str(invoices[1].id), "status": "WAITING_APPROVAL"
+    })
+    assert history.status_code == 200
+    assert any(item["execution_id"] == execution["execution_id"] for item in history.json())
+    audit = client.get(f'/api/v1/workflows/executions/{execution["execution_id"]}/audit')
+    assert audit.status_code == 200
+    assert any(item["payload"].get("to") == "WAITING_APPROVAL" for item in audit.json())
+
+
+def test_sample_workspace_setup_is_explicit_guarded_and_idempotent(demo, monkeypatch):
+    from sqlalchemy import func
+    from app.models.workflow import Workflow
+
+    client, db, _ = demo
+    monkeypatch.setenv("ENABLE_DEMO_SETUP", "false")
+    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 403
+    monkeypatch.setenv("ENABLE_DEMO_SETUP", "true")
+    assert client.post("/api/v1/demo/setup").status_code == 403
+    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 200
+    counts = (db.scalar(select(func.count()).select_from(Invoice)),
+              db.scalar(select(func.count()).select_from(Workflow)))
+    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 200
+    assert counts == (db.scalar(select(func.count()).select_from(Invoice)),
+                      db.scalar(select(func.count()).select_from(Workflow)))
+    workflows = client.get("/api/v1/workflows").json()
+    assert {"Invoice Exception Review", "AI Invoice Exception Resolution"}.issubset(
+        {workflow["name"] for workflow in workflows})
+    assert all("definition" in workflow for workflow in workflows)

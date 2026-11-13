@@ -3,6 +3,7 @@ from app.api.invoices import router as invoice_router
 from app.api.workflows import router as workflow_router
 from app.api.approvals import router as approval_router
 from app.api.investigations import router as investigation_router
+from app.api.demo import router as demo_router
 from app.core.logging_config import configure_logging
 
 configure_logging()
@@ -12,6 +13,7 @@ app.include_router(invoice_router)
 app.include_router(workflow_router)
 app.include_router(approval_router)
 app.include_router(investigation_router)
+app.include_router(demo_router)
 
 
 @app.get("/health")

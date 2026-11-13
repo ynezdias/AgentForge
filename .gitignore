@@ -3,3 +3,46 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
+.env.*
+.env.example
+.envrc
+.tools/
+
+# Credentials and private keys
+.aws/
+.codex/
+.secrets/
+secrets/
+credentials*.json
+service-account*.json
+service_account*.json
+secrets.json
+secrets.yaml
+secrets.yml
+secrets.toml
+.ssh/
+.netrc
+_netrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+
+# Local databases, exports, and runtime logs (keep source migrations tracked)
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+backups/
+pgdata/
+postgres-data/
+*.log
+
+# Frontend dependencies and generated output
+node_modules/
+.next/

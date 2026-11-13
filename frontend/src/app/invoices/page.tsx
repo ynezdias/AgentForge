@@ -1,186 +1,66 @@
 "use client";
+import { Suspense, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ArrowRight, CheckCircle2, FileText, LoaderCircle, Play, Search, ShieldCheck, Sparkles, TriangleAlert } from "lucide-react";
+import { useWorkspace } from "@/components/Workspace";
+import { EmptyWorkspace, Loading, PageHeading, StatusBadge } from "@/components/UI";
+import ExecutionDetails from "@/components/ExecutionDetails";
+import { api } from "@/lib/api";
+import { issueLabel, money, reference } from "@/lib/format";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { AlertCircle, Check, GitBranch, Play, RefreshCw, ShieldCheck, X } from "lucide-react";
-import { api, type Execution, type Invoice, type Workflow } from "@/lib/api";
-
-const panel = "rounded-xl border border-slate-800 bg-slate-900 p-6";
-const control = "w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50";
-const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Request failed";
-
-export default function InvoicesPage() {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [workflows, setWorkflows] = useState<Workflow[]>([]);
-  const [selectedInvoice, setSelectedInvoice] = useState("");
-  const [selectedWorkflow, setSelectedWorkflow] = useState("");
-  const [execution, setExecution] = useState<Execution | null>(null);
-  const [loadingData, setLoadingData] = useState(true);
-  const [action, setAction] = useState<"run" | "approve" | "reject" | "refresh" | null>(null);
+function InvoiceQueue() {
+  const { invoices, workflows, runs, loading, refresh, error: workspaceError } = useWorkspace();
+  const params = useSearchParams();
+  const router = useRouter();
+  const [selectedId, setSelectedId] = useState(params.get("invoice") ?? "");
+  const [workflowId, setWorkflowId] = useState("");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("All invoices");
+  const [running, setRunning] = useState(false);
   const [error, setError] = useState("");
-  const busy = useRef(false);
-  const pendingKey = useRef<string | null>(null);
-
-  async function loadData() {
-    setLoadingData(true);
-    setError("");
+  const request = useRef<{ signature: string; key: string } | null>(null);
+  const locked = useRef(false);
+  const executionId = params.get("execution");
+  const runInvoice = runs.find((run) => run.execution_id === executionId)?.invoice_id;
+  const selected = invoices.find((invoice) => invoice.id === (params.get("invoice") ?? selectedId ?? runInvoice)) ?? invoices.find((invoice) => invoice.id === runInvoice);
+  const chosenWorkflow = workflows.find((workflow) => workflow.id === workflowId) ?? workflows.find((workflow) => !workflow.definition?.steps.some((step) => step.tool === "invoice.investigate")) ?? workflows[0];
+  const ai = chosenWorkflow?.definition?.steps.some((step) => step.tool === "invoice.investigate");
+  const filtered = invoices.filter((invoice) => {
+    const match = `${invoice.vendor_name} ${invoice.id} ${invoice.amount}`.toLowerCase().includes(search.toLowerCase());
+    return match && (filter === "All invoices" || (filter === "Exceptions" && invoice.validation?.valid === false && invoice.status !== "review_approved") || (filter === "Reviewed" && invoice.status === "review_approved"));
+  });
+  function select(id: string) { if (running) return; setSelectedId(id); setError(""); request.current = null; router.replace(`/invoices?invoice=${id}`, { scroll: false }); }
+  async function execute() {
+    if (!selected || !chosenWorkflow || locked.current) return;
+    locked.current = true; setRunning(true); setError("");
+    const signature = `${selected.id}:${chosenWorkflow.id}`;
+    if (request.current?.signature !== signature) request.current = { signature, key: crypto.randomUUID() };
     try {
-      const [invoiceData, workflowData] = await Promise.all([api.getInvoices(), api.getWorkflows()]);
-      setInvoices(invoiceData);
-      setWorkflows(workflowData);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setLoadingData(false);
-    }
+      const result = await api.executeWorkflow(chosenWorkflow.id, selected.id, request.current!.key);
+      request.current = null;
+      router.replace(`/invoices?invoice=${selected.id}&execution=${result.execution_id}`, { scroll: false });
+      await refresh();
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not start the workflow. Try again."); }
+    finally { locked.current = false; setRunning(false); }
   }
-
-  useEffect(() => {
-    let active = true;
-    Promise.all([api.getInvoices(), api.getWorkflows()])
-      .then(([invoiceData, workflowData]) => {
-        if (!active) return;
-        setInvoices(invoiceData);
-        setWorkflows(workflowData);
-      })
-      .catch((err: unknown) => { if (active) setError(errorMessage(err)); })
-      .finally(() => { if (active) setLoadingData(false); });
-    return () => { active = false; };
-  }, []);
-
-  async function runWorkflow() {
-    if (busy.current || !selectedInvoice || !selectedWorkflow) return;
-    busy.current = true;
-    setAction("run");
-    setError("");
-    setExecution(null);
-    // A transport failure may follow a successful server insertion. Reuse the
-    // key on the next try for these selections to avoid starting a second run.
-    pendingKey.current ??= crypto.randomUUID();
-    try {
-      const result = await api.executeWorkflow(selectedWorkflow, selectedInvoice, pendingKey.current);
-      setExecution(result);
-      pendingKey.current = null;
-    } catch (err) {
-      setError(`${errorMessage(err)}. Trying again with the same selections reuses the request key.`);
-    } finally {
-      busy.current = false;
-      setAction(null);
-    }
-  }
-
-  async function refreshExecution() {
-    if (!execution || busy.current) return;
-    busy.current = true;
-    setAction("refresh");
-    setError("");
-    try {
-      setExecution(await api.getExecution(execution.execution_id));
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      busy.current = false;
-      setAction(null);
-    }
-  }
-
-  async function handleDecision(decision: "approve" | "reject") {
-    if (!execution || execution.status !== "WAITING_APPROVAL" || busy.current) return;
-    busy.current = true;
-    setAction(decision);
-    setError("");
-    let decisionRecorded = false;
-    try {
-      const result = await api.approveExecution(execution.execution_id, decision);
-      decisionRecorded = true;
-      // Hide decision controls immediately even if the following refresh fails.
-      setExecution((previous) => previous ? { ...previous, status: result.status } : previous);
-      setExecution(await api.getExecution(execution.execution_id));
-      setInvoices(await api.getInvoices());
-    } catch (err) {
-      setError(`${decisionRecorded ? "Decision recorded, but the latest data could not be loaded. Refresh the execution. " : ""}${errorMessage(err)}`);
-    } finally {
-      busy.current = false;
-      setAction(null);
-    }
-  }
-
-  function clearRun() {
-    setExecution(null);
-    setError("");
-    pendingKey.current = null;
-  }
-
-  const recommendation = execution?.context.ai_recommendation;
-  const loading = action !== null;
-
-  return (
-    <main className="min-h-screen bg-slate-950 p-6 text-slate-100 md:p-10">
-      <div className="mx-auto max-w-5xl">
-        <nav aria-label="Page navigation" className="mb-8 flex gap-5 text-sm text-blue-400"><Link href="/">Dashboard</Link><Link href="/workflows">Workflow Visualization</Link></nav>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-[0.18em] text-blue-400">Operations console</p>
-        <h1 className="text-3xl font-bold tracking-tight">Invoice Operations</h1>
-        <p className="mt-2 text-slate-400">Run AI-powered invoice exception workflows.</p>
-
-        <section aria-labelledby="run-title" aria-busy={loadingData || action === "run"} className={`${panel} mt-8`}>
-          <h2 id="run-title" className="mb-5 flex items-center gap-2 font-semibold"><GitBranch size={20} className="text-blue-400" />Start a workflow</h2>
-          <div className="grid gap-5 md:grid-cols-2">
-            <div><label htmlFor="invoice" className="mb-2 block text-sm text-slate-300">Select Invoice</label>
-              <select id="invoice" value={selectedInvoice} disabled={loadingData || loading} onChange={(event) => { setSelectedInvoice(event.target.value); clearRun(); }} className={control}>
-                <option value="">{loadingData ? "Loading invoices…" : "Choose an invoice"}</option>
-                {invoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.id.slice(0, 8)} — {invoice.currency} {Number(invoice.amount).toFixed(2)} · {invoice.status.replaceAll("_", " ")}</option>)}
-              </select>
-            </div>
-            <div><label htmlFor="workflow" className="mb-2 block text-sm text-slate-300">Select Workflow</label>
-              <select id="workflow" value={selectedWorkflow} disabled={loadingData || loading} onChange={(event) => { setSelectedWorkflow(event.target.value); clearRun(); }} className={control}>
-                <option value="">{loadingData ? "Loading workflows…" : "Choose a workflow"}</option>
-                {workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name} · v{workflow.version}</option>)}
-              </select>
-            </div>
-          </div>
-          {!loadingData && (invoices.length === 0 || workflows.length === 0) && <p className="mt-4 text-sm text-slate-400">{invoices.length === 0 ? "No invoices are available. Add sample invoice data in the backend. " : ""}{workflows.length === 0 ? "No workflows are available. Create an AI invoice workflow in the backend to get started." : ""}</p>}
-          <div className="mt-6 flex flex-wrap items-center gap-4">
-            <button onClick={() => void runWorkflow()} disabled={loading || loadingData || !selectedInvoice || !selectedWorkflow} className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-3 text-sm font-medium hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"><Play size={16} />{action === "run" ? "Running workflow…" : "Run Workflow"}</button>
-            <button onClick={() => void loadData()} disabled={loading || loadingData} className="text-sm text-slate-400 hover:text-white disabled:opacity-50">Reload lists</button>
-            {action === "run" && <p role="status" className="text-sm text-slate-400">Validation and AI investigation may take a moment.</p>}
-          </div>
-        </section>
-
-        {error && <div role="alert" className="mt-6 flex items-start gap-3 rounded-lg border border-red-800 bg-red-950 p-4 text-sm text-red-200"><AlertCircle size={18} className="mt-0.5 shrink-0" /><span className="break-all">{error}</span></div>}
-
-        {execution && <section aria-label="Workflow execution" className="mt-8 space-y-6">
-          <div className={panel}>
-            <div className="flex items-center justify-between gap-4"><h2 className="text-xl font-semibold">Execution Result</h2><button aria-label="Refresh execution" onClick={() => void refreshExecution()} disabled={loading} className="rounded-lg border border-slate-700 p-2 text-slate-300 hover:bg-slate-800 disabled:opacity-50"><RefreshCw size={16} className={action === "refresh" ? "animate-spin" : ""} /></button></div>
-            <p className="mt-4 break-all font-mono text-xs text-slate-400">Execution: {execution.execution_id}</p>
-            <p role="status" className="mt-3 text-sm">Status: <span className={`font-semibold ${execution.status === "FAILED" || execution.status === "REJECTED" ? "text-red-300" : execution.status === "COMPLETED" ? "text-emerald-300" : "text-blue-400"}`}>{execution.status}</span></p>
-            {execution.context.discrepancy_percentage !== undefined && <p className="mt-3 text-sm text-slate-300">Discrepancy: {Number(execution.context.discrepancy_percentage).toFixed(2)}%</p>}
-            {execution.context.issues && execution.context.issues.length > 0 && <p className="mt-3 text-sm text-amber-300">Issues: {execution.context.issues.join(", ")}</p>}
-            {execution.context.valid === true && <p className="mt-3 text-sm text-emerald-300">Invoice validation passed.</p>}
-            {execution.context.error && <p role="alert" className="mt-3 text-sm text-red-300">{execution.context.error}</p>}
-            {(execution.status === "PENDING" || execution.status === "RUNNING") && <p className="mt-3 text-sm text-slate-400">Execution is in progress. Refresh to retrieve its latest status.</p>}
-          </div>
-
-          {recommendation && <div className={panel}>
-            <h2 className="text-xl font-semibold">Gemini Investigation</h2>
-            <p className="mt-4 leading-7">{recommendation.summary}</p>
-            <div className="mt-5 flex flex-wrap gap-3 text-xs"><span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-amber-200">Risk: {recommendation.risk_level}</span><span className="rounded-full border border-slate-700 px-3 py-1.5 text-slate-300">Human review required</span></div>
-            <p className="mt-5 text-sm"><span className="text-slate-400">Recommended action: </span>{recommendation.recommended_action.replaceAll("_", " ")}</p>
-            <p className="mt-3 text-sm leading-7 text-slate-400">{recommendation.reasoning}</p>
-          </div>}
-
-          {execution.status === "WAITING_APPROVAL" && <div className={panel}>
-            <h2 className="flex items-center gap-2 text-lg font-semibold"><ShieldCheck size={20} className="text-blue-400" />Manager review</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-400">Approval allows the workflow to record the invoice as review approved. It does not change the amount, send payment, or carry out the AI recommendation.</p>
-            <div className="mt-5 flex flex-wrap gap-3"><button onClick={() => void handleDecision("approve")} disabled={loading} className="flex items-center gap-2 rounded-lg bg-emerald-700 px-5 py-3 text-sm font-medium hover:bg-emerald-600 disabled:opacity-50"><Check size={16} />{action === "approve" ? "Approving…" : "Approve"}</button><button onClick={() => void handleDecision("reject")} disabled={loading} className="flex items-center gap-2 rounded-lg bg-red-800 px-5 py-3 text-sm font-medium hover:bg-red-700 disabled:opacity-50"><X size={16} />{action === "reject" ? "Rejecting…" : "Reject"}</button></div>
-            <p className="mt-4 text-xs text-slate-500">Local prototype · decisions use the development manager identity.</p>
-          </div>}
-
-          <div className={panel}>
-            <h2 className="text-xl font-semibold">Execution History</h2><p className="mt-2 text-sm text-slate-400">Recorded steps for this execution, in workflow order.</p>
-            {execution.steps.length === 0 ? <p className="mt-5 text-sm text-slate-500">No step results have been recorded.</p> : <ol className="mt-5 space-y-3">{execution.steps.map((step, index) => <li key={step.step_id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4"><div className="flex flex-wrap items-center justify-between gap-2 text-sm"><span className="break-all font-medium"><span className="mr-3 text-slate-500">{index + 1}.</span>{step.step_id}</span><span className="text-xs text-blue-300">{step.status}</span></div><details className="mt-3 text-xs text-slate-400"><summary className="cursor-pointer hover:text-white">View step result</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-all rounded bg-slate-950 p-3 leading-6">{JSON.stringify(step.result, null, 2)}</pre></details></li>)}</ol>}
-          </div>
-        </section>}
+  return <>
+    <PageHeading eyebrow="ACCOUNTS PAYABLE" title="Invoice queue" description="Find an exception, compare the details, and start a review." action={<span className="badge">{invoices.length} invoices</span>} />
+    {loading ? <Loading /> : invoices.length === 0 && !workspaceError ? <div className="card"><EmptyWorkspace /></div> : <div className="invoice-grid">
+      <div className="stack"><section className="card"><div className="toolbar"><div className="tabs" aria-label="Filter invoices">{["All invoices", "Exceptions", "Reviewed"].map((value) => <button className={`tab ${filter === value ? "active" : ""}`} key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value}</button>)}</div><label className="search"><Search size={15} /><input placeholder="Search suppliers or reference" aria-label="Search invoices" value={search} onChange={(event) => setSearch(event.target.value)} /></label></div>
+        <div className="table-wrap"><table><thead><tr><th>Supplier / reference</th><th>Invoice amount</th><th>Validation</th><th /></tr></thead><tbody>{filtered.map((invoice) => <tr key={invoice.id} className={`select-row ${selected?.id === invoice.id ? "selected" : ""}`}><td><div className="supplier"><span className="supplier-avatar">{invoice.vendor_name?.split(" ").map((word) => word[0]).slice(0, 2).join("") ?? "SU"}</span><div><strong>{invoice.vendor_name ?? "Supplier"}</strong><small>{reference(invoice.id)}</small></div></div></td><td><div className="number">{money(invoice.amount, invoice.currency)}</div><small className="subtle">PO {money(invoice.purchase_order_amount, invoice.purchase_order_currency)}</small></td><td>{invoice.status === "review_approved" ? <StatusBadge status={invoice.status} /> : <span className={`badge ${invoice.validation?.valid === false ? "exception" : "valid"}`}><i />{invoice.validation?.valid === false ? "Exception" : "Matches PO"}</span>}</td><td><button disabled={running} onClick={() => select(invoice.id)} className="row-button" aria-label={`Review ${invoice.vendor_name ?? "supplier"} invoice ${reference(invoice.id)}`}>{selected?.id === invoice.id ? "Selected" : "Review"} <ArrowRight size={11} style={{ display: "inline" }} /></button></td></tr>)}</tbody></table></div>
+        {filtered.length === 0 && <div className="empty-small">No invoices match this search.</div>}<div className="table-footer"><span>{filtered.length} of {invoices.length} invoices</span><span>Select an invoice to see its details</span></div></section>
+        {executionId && <ExecutionDetails key={executionId} id={executionId} />}
       </div>
-    </main>
-  );
+      <aside className="stack">{selected ? <section className="card"><div className="card-header"><h2>Invoice details</h2><FileText size={17} color="#8b9cad" /></div><div className="card-body"><div className="detail-heading"><span className="badge">USD supplier invoice</span><StatusBadge status={selected.status} /></div><h2 className="detail-title">{selected.vendor_name ?? "Supplier invoice"}</h2><p className="reference">Reference {reference(selected.id)}</p><div className="amount-pair"><div><span>Invoice total</span><strong>{money(selected.amount, selected.currency)}</strong></div><div><span>Purchase order</span><strong>{money(selected.purchase_order_amount, selected.purchase_order_currency)}</strong></div></div>
+        <div className={`issues ${selected.validation?.valid ? "valid" : ""}`}><p>{selected.validation?.valid ? <CheckCircle2 size={14} /> : <TriangleAlert size={14} />}<strong>{selected.validation?.valid ? "Invoice matches the purchase order" : "This invoice needs review"}</strong></p>{selected.validation?.valid === false && <ul>{selected.validation.issues.map((issue) => <li key={issue}>{issueLabel(issue)}{issue === "AMOUNT_DISCREPANCY" ? ` · ${Number(selected.validation?.discrepancy_percentage).toFixed(2)}%` : ""}</li>)}</ul>}</div>
+        <label htmlFor="workflow" className="field-label">Review workflow</label><select id="workflow" className="field" value={chosenWorkflow?.id ?? ""} disabled={running || workflows.length === 0} onChange={(event) => { setWorkflowId(event.target.value); request.current = null; }}><option value="" disabled>Choose a workflow</option>{workflows.map((workflow) => <option key={workflow.id} value={workflow.id}>{workflow.name}</option>)}</select>
+        <p className="help" style={{ display: "flex", gap: 7 }}>{ai ? <Sparkles size={14} /> : <ShieldCheck size={14} />}{ai ? "Includes a live Gemini investigation. AI service access is required." : "Validates with business rules and routes exceptions to a manager. No AI call is made."}</p>
+        <button className="button primary full" onClick={() => void execute()} disabled={running || !chosenWorkflow}>{running ? <LoaderCircle size={16} className="spin" /> : <Play size={15} />}{running ? ai ? "Investigating invoice…" : "Starting review…" : "Run review workflow"}</button>
+        {error && <p role="alert" className="error-text" style={{ marginTop: 12 }}>{error} Try again with these selections to reuse the request key.</p>}
+        <p className="help">Exceptions pause for a human decision. Passing invoices finish automatically.</p>
+      </div></section> : <section className="card"><div className="empty-state"><span className="empty-icon"><FileText size={27} /></span><h2>Select an invoice</h2><p>Choose Review in the queue to compare it with its purchase order and start a workflow.</p></div></section>}
+      <section className="card"><div className="card-body"><div className="workflow-number"><ShieldCheck size={16} />REVIEW WITH CONFIDENCE</div><p className="help" style={{ marginTop: 12 }}>Manager approval records the invoice as review approved. Invoice amounts and payment instructions stay unchanged.</p></div></section></aside>
+    </div>}
+  </>;
 }
+export default function InvoicesPage() { return <Suspense fallback={<Loading />}><InvoiceQueue /></Suspense>; }

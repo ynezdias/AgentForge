@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.session import get_db
 from app.models.business import Invoice, PurchaseOrder
@@ -25,6 +25,10 @@ class InvoiceResponse(InvoiceCreate):
 
     id: uuid.UUID
     status: str
+    vendor_name: str | None = None
+    purchase_order_amount: Decimal | None = None
+    purchase_order_currency: str | None = None
+    validation: dict | None = None
 
 
 @router.post("", response_model=InvoiceResponse, status_code=201)
@@ -47,7 +51,23 @@ def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
 def list_invoices(db: Session = Depends(get_db)):
     from sqlalchemy import select
 
-    return db.scalars(select(Invoice).limit(100)).all()
+    invoices = db.scalars(select(Invoice).options(
+        selectinload(Invoice.vendor), selectinload(Invoice.purchase_order)
+    ).order_by(Invoice.id).limit(100)).all()
+    results = []
+    for invoice in invoices:
+        result = InvoiceResponse.model_validate(invoice).model_dump()
+        po = invoice.purchase_order
+        result.update(vendor_name=invoice.vendor.name,
+                      purchase_order_amount=po.total_amount,
+                      purchase_order_currency=po.currency)
+        try:
+            result["validation"] = validate_invoice(invoice, po)
+        except ValueError:
+            result["validation"] = {"valid": False, "issues": ["INVALID_PURCHASE_ORDER_AMOUNT"],
+                                    "discrepancy_percentage": None}
+        results.append(result)
+    return results
 
 
 @router.get("/{invoice_id}/validate")
