@@ -1,7 +1,8 @@
 import uuid
 from decimal import Decimal
+from datetime import date
 
-from sqlalchemy import String, ForeignKey, Numeric
+from sqlalchemy import String, ForeignKey, Numeric, Date, UniqueConstraint, CheckConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID
 
@@ -39,6 +40,10 @@ class PurchaseOrder(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (
+        UniqueConstraint("duplicate_key", name="uq_invoices_duplicate_key"),
+        CheckConstraint("due_date IS NULL OR invoice_date IS NULL OR due_date >= invoice_date", name="ck_invoice_dates"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -54,6 +59,10 @@ class Invoice(Base):
     )
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     status: Mapped[str] = mapped_column(String(30), default="pending")
+    invoice_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    duplicate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     vendor: Mapped["Vendor"] = relationship()
     purchase_order: Mapped["PurchaseOrder"] = relationship()
