@@ -2,6 +2,7 @@ export type InvoiceValidation = { valid: boolean; discrepancy_percentage: string
 export type Invoice = {
   id: string; vendor_id: string; purchase_order_id: string; amount: string;
   currency: string; status: string; vendor_name?: string;
+  invoice_number?: string | null; invoice_date?: string | null; due_date?: string | null;
   purchase_order_amount?: string; purchase_order_currency?: string;
   validation?: InvoiceValidation;
 };
@@ -31,19 +32,33 @@ function execution(value: unknown): Execution {
   if (!run(value) || typeof currentStep !== "number" || !Array.isArray(steps) || !steps.every((step: unknown) => object(step) && typeof step.step_id === "string" && typeof step.status === "string" && object(step.result))) throw new Error("Execution details could not be read. Refresh to try again.");
   return value as Execution;
 }
+export class DuplicateInvoiceError extends Error {
+  constructor(message: string, public invoiceId: string) { super(message); this.name = "DuplicateInvoiceError"; }
+}
 async function apiRequest(path: string, options?: RequestInit): Promise<unknown> {
   let response: Response;
   try { response = await fetch(`/api/backend/${path}`, { ...options, cache: "no-store" }); }
   catch { throw new Error("Cannot connect to AgentForge. Check that the application is running and try again."); }
   if (!response.ok) {
     let message = "The request could not be completed.";
-    try { const body: unknown = await response.json(); if (object(body) && typeof body.detail === "string") message = body.detail; } catch { /* Preserve a readable error for non-JSON upstream failures. */ }
+    let duplicateId = "";
+    try {
+      const body: unknown = await response.json();
+      if (object(body) && typeof body.detail === "string") message = body.detail;
+      else if (object(body) && object(body.detail) && body.detail.code === "DUPLICATE_INVOICE" && typeof body.detail.invoice_id === "string" && typeof body.detail.message === "string") {
+        duplicateId = body.detail.invoice_id; message = body.detail.message;
+      } else if (object(body) && Array.isArray(body.detail)) message = body.detail.map((item: unknown) => object(item) && typeof item.msg === "string" ? `${Array.isArray(item.loc) ? item.loc.slice(1).join(".") : "Field"}: ${item.msg}` : "Check the invoice details").join("; ");
+    } catch { /* Preserve a readable error for non-JSON upstream failures. */ }
+    if (response.status === 409 && duplicateId) throw new DuplicateInvoiceError(message, duplicateId);
     throw new Error(response.status === 503 ? "The backend is unavailable. Start the application and refresh this page." : message);
   }
   return response.json();
 }
 const managerHeaders = { "Content-Type": "application/json", "x-demo-manager-token": "local-manager-demo" };
 export const api = {
+  getPurchaseOrders: async () => await apiRequest("invoices/purchase-orders") as Array<{ id: string; vendor_name: string; amount: string; currency: string }>,
+  createInvoice: async (payload: { purchase_order_id?: string; supplier_name?: string; po_amount?: string; amount: string; currency: string; invoice_number: string; invoice_date: string; due_date?: string }) => await apiRequest("invoices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) }) as Invoice,
+  extractPDF: async (content: string) => await apiRequest("invoices/extract-pdf", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }) as { amount: string | null; supplier_name: string | null; currency: string | null; invoice_number: string | null; invoice_date: string | null; due_date: string | null; text_preview: string; notice: string },
   getInvoices: async () => array<Invoice>(await apiRequest("invoices"), (item) => object(item) && typeof item.id === "string" && typeof item.amount === "string" && typeof item.currency === "string" && typeof item.status === "string"),
   getWorkflows: async () => array<Workflow>(await apiRequest("workflows"), (item) => object(item) && typeof item.id === "string" && typeof item.name === "string"),
   getExecutions: async () => array<WorkflowRun>(await apiRequest("workflows/executions"), run),
