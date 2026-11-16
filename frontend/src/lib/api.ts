@@ -53,6 +53,8 @@ async function apiRequest(path: string, options?: RequestInit): Promise<unknown>
   if (response.status === 401 && path !== "auth/login" && typeof window !== "undefined") {
     // Session expired or revoked: return to this portal's sign-in page.
     const portal = window.location.pathname.startsWith("/admin") ? "admin" : "company";
+    // Outside React, so a full navigation (which also drops stale client state) is intended.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign(`/login/${portal}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
     throw new Error("Your session has ended. Sign in again to continue.");
   }
