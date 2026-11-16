@@ -13,6 +13,16 @@ export function dueDatePassed(value?: string | null) {
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return value < today;
 }
-export const statusLabel = (status: string) => ({ PENDING: "Queued", RUNNING: "Running", WAITING_APPROVAL: "Needs approval", COMPLETED: "Completed", FAILED: "Needs attention", REJECTED: "Rejected", pending: "Pending review", review_approved: "Review approved" }[status] ?? status.replaceAll("_", " "));
+export const statusLabel = (status: string) => ({ PENDING: "Queued", RUNNING: "Running", WAITING_APPROVAL: "Needs approval", COMPLETED: "Completed", FAILED: "Needs attention", REJECTED: "Rejected", pending: "Pending review", review_approved: "Review approved", review_rejected: "Review rejected" }[status] ?? status.replaceAll("_", " "));
 export function dateLabel(value?: string) { return value ? new Date(value).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; }
 export const issueLabel = (issue: string) => ({ AMOUNT_DISCREPANCY: "Amount exceeds tolerance", VENDOR_MISMATCH: "Vendor does not match", CURRENCY_MISMATCH: "Currency does not match", INVALID_PURCHASE_ORDER_AMOUNT: "Purchase order needs checking" }[issue] ?? issue.replaceAll("_", " ").toLowerCase());
+const EVENT_LABELS: Record<string, string> = {
+  INVOICE_SUBMITTED: "Invoice submitted", APPROVAL_DECIDED: "Decision recorded", DECISION_OVERRIDDEN: "Decision overridden",
+  EXCEPTION_ESCALATED: "Escalated to admin", EXCEPTION_REOPENED: "Exception reopened", STEP_COMPLETED: "Step completed",
+  STEP_REJECTED: "Step rejected", STEP_WAITING_APPROVAL: "Waiting for approval",
+};
+export function eventLabel(event: { event_type: string; payload: Record<string, unknown> }) {
+  if (event.event_type === "EXECUTION_STATE_CHANGED") return `Status → ${statusLabel(String(event.payload.to))}`;
+  if (event.event_type === "APPROVAL_DECIDED") return event.payload.decision === "approve" ? "Approved" : "Rejected";
+  return EVENT_LABELS[event.event_type] ?? event.event_type.toLowerCase().replaceAll("_", " ");
+}
