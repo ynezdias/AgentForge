@@ -77,6 +77,15 @@ class WorkflowExecution(Base):
         String(200), unique=True, nullable=False
     )
 
+    # Copied from the invoice at creation so every query can scope by tenant.
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True, index=True
+    )
+    # Escalated executions can only be decided by an admin.
+    escalated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utc_now,
@@ -135,6 +144,12 @@ class ApprovalRequest(Base):
         String(30), default="manager", nullable=False
     )
     decided_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )

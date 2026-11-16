@@ -17,6 +17,7 @@ from app.db.session import engine, get_db
 from app.main import app
 from app.models.business import Invoice, PurchaseOrder, Vendor
 from app.models.investigation import InvoiceInvestigation
+from tests.auth_helpers import headers as auth_headers, make_company, make_user
 
 
 pytestmark = pytest.mark.skipif(
@@ -36,6 +37,9 @@ def demo(monkeypatch):
 
                 app.dependency_overrides[get_db] = override_db
                 try:
+                    company = make_company(db)
+                    member = make_user(db, "company", company)
+                    outsider = make_user(db, "company", make_company(db))
                     vendor = Vendor(name="Investigation test", external_ref=str(uuid4()))
                     db.add(vendor)
                     db.flush()
@@ -43,10 +47,11 @@ def demo(monkeypatch):
                     db.add(po)
                     db.flush()
                     invoice = Invoice(vendor_id=vendor.id, purchase_order_id=po.id,
-                                      amount=Decimal("1150"))
+                                      amount=Decimal("1150"), company_id=company.id)
                     db.add(invoice)
                     db.commit()
-                    with TestClient(app) as client:
+                    with TestClient(app, headers=auth_headers(member)) as client:
+                        client.outsider = auth_headers(outsider)
                         yield client, db, invoice
                 finally:
                     app.dependency_overrides.pop(get_db, None)
@@ -115,4 +120,15 @@ def test_missing_invoice_returns_404(demo, monkeypatch):
     graph = MagicMock()
     monkeypatch.setattr(investigations, "investigation_graph", graph)
     assert client.post(f"/api/v1/investigations/{uuid4()}").status_code == 404
+    graph.invoke.assert_not_called()
+
+
+def test_other_company_cannot_investigate(demo, monkeypatch):
+    client, _, invoice = demo
+    graph = MagicMock()
+    monkeypatch.setattr(investigations, "investigation_graph", graph)
+    assert client.post(f"/api/v1/investigations/{invoice.id}",
+                       headers=client.outsider).status_code == 404
+    assert client.post(f"/api/v1/investigations/{invoice.id}",
+                       headers={"Authorization": ""}).status_code == 401
     graph.invoke.assert_not_called()

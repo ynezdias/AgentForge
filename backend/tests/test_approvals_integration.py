@@ -16,6 +16,9 @@ from app.models.workflow import ApprovalRequest, WorkflowExecution
 from app.models.audit import AuditEvent
 from app.models.investigation import InvoiceInvestigation
 from app.services import ai_tools
+from types import SimpleNamespace
+
+from tests.auth_helpers import headers as auth_headers, make_company, make_user
 
 
 pytestmark = pytest.mark.skipif(
@@ -33,7 +36,8 @@ DEFINITION = {
         {"id": "apply_resolution", "type": "tool", "tool": "invoice.resolve"},
     ],
 }
-MANAGER = {"x-demo-manager-token": "local-manager-demo"}
+# Requests default to the owning company user; admin calls pass client.actors.admin.
+MANAGER = {}
 
 
 @pytest.fixture
@@ -47,6 +51,10 @@ def demo():
 
                 app.dependency_overrides[get_db] = override_db
                 try:
+                    company = make_company(db)
+                    member = make_user(db, "company", company)
+                    admin = make_user(db, "admin")
+                    outsider = make_user(db, "company", make_company(db))
                     vendor = Vendor(name="Approval test", external_ref=str(uuid4()))
                     db.add(vendor)
                     db.flush()
@@ -54,11 +62,14 @@ def demo():
                     db.add(po)
                     db.flush()
                     invoices = [Invoice(vendor_id=vendor.id, purchase_order_id=po.id,
-                                        amount=Decimal(amount))
+                                        amount=Decimal(amount), company_id=company.id)
                                 for amount in ("1000", "1150")]
                     db.add_all(invoices)
                     db.commit()
-                    with TestClient(app) as client:
+                    with TestClient(app, headers=auth_headers(member)) as client:
+                        client.actors = SimpleNamespace(
+                            admin=auth_headers(admin), outsider=auth_headers(outsider),
+                            member=member, admin_user=admin)
                         yield client, db, invoices
                 finally:
                     app.dependency_overrides.pop(get_db, None)
@@ -67,7 +78,7 @@ def demo():
 
 
 def start(client, invoice, definition=DEFINITION):
-    response = client.post("/api/v1/workflows", json=definition)
+    response = client.post("/api/v1/workflows", json=definition, headers=client.actors.admin)
     assert response.status_code == 201
     url = f'/api/v1/workflows/{response.json()["id"]}/execute'
     headers = {"idempotency-key": str(uuid4())}
@@ -101,10 +112,11 @@ def test_approval_decision_and_duplicate_prevention(demo, decision):
     assert invoice.status == "pending"
     assert client.post(url, headers=headers, json=payload).json() == execution
 
-    for auth in ({}, {"x-demo-manager-token": "wrong"}):
+    for auth, status in (({"Authorization": ""}, 401), ({"Authorization": "Bearer forged"}, 401),
+                         (client.actors.outsider, 404)):
         denied = client.post(f"/api/v1/approvals/{execution_id}", headers=auth,
                              json={"decision": decision})
-        assert denied.status_code == 403
+        assert denied.status_code == status
     db.refresh(db.get(WorkflowExecution, UUID(execution_id)))
     assert db.get(WorkflowExecution, UUID(execution_id)).status == "WAITING_APPROVAL"
 
@@ -115,13 +127,15 @@ def test_approval_decision_and_duplicate_prevention(demo, decision):
     assert result["status"] == ("COMPLETED" if decision == "approve" else "REJECTED")
     assert result["current_step"] == (4 if decision == "approve" else 3)
     db.refresh(invoice)
-    assert invoice.status == ("review_approved" if decision == "approve" else "pending")
+    assert invoice.status == ("review_approved" if decision == "approve" else "review_rejected")
     assert len(result["steps"]) == (4 if decision == "approve" else 3)
     approval = db.scalar(select(ApprovalRequest).where(
         ApprovalRequest.execution_id == UUID(execution_id)
     ))
     assert approval.status == ("APPROVED" if decision == "approve" else "REJECTED")
-    assert approval.decided_by == "demo-manager"
+    assert approval.decided_by == client.actors.member.email
+    assert approval.decided_by_user_id == client.actors.member.id
+    assert approval.decided_at is not None
     duplicate = client.post(f"/api/v1/approvals/{execution_id}", headers=MANAGER,
                             json={"decision": decision})
     assert duplicate.status_code == 409
@@ -220,7 +234,7 @@ def test_ai_workflow_persistence_and_audit(demo, monkeypatch, decision):
     assert approved.status_code == 200
     assert approved.json()["status"] == ("COMPLETED" if decision == "approve" else "REJECTED")
     db.refresh(invoices[1])
-    assert invoices[1].status == ("review_approved" if decision == "approve" else "pending")
+    assert invoices[1].status == ("review_approved" if decision == "approve" else "review_rejected")
     assert invoices[1].amount == Decimal("1150.00")
     history = events()
     decisions = [event for event in history if event.event_type == "APPROVAL_DECIDED"]
@@ -390,16 +404,22 @@ def test_sample_workspace_setup_is_explicit_guarded_and_idempotent(demo, monkeyp
 
     client, db, _ = demo
     monkeypatch.setenv("ENABLE_DEMO_SETUP", "false")
-    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 403
+    assert client.post("/api/v1/demo/setup", headers=client.actors.admin).status_code == 403
     monkeypatch.setenv("ENABLE_DEMO_SETUP", "true")
-    assert client.post("/api/v1/demo/setup").status_code == 403
-    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 200
+    assert client.post("/api/v1/demo/setup").status_code == 403  # company user
+    assert client.post("/api/v1/demo/setup", headers={"Authorization": ""}).status_code == 401
+    monkeypatch.setenv("APP_ENV", "production")
+    assert client.post("/api/v1/demo/setup", headers=client.actors.admin).status_code == 403
+    monkeypatch.setenv("APP_ENV", "test")
+    assert client.post("/api/v1/demo/setup", headers=client.actors.admin).status_code == 200
     counts = (db.scalar(select(func.count()).select_from(Invoice)),
               db.scalar(select(func.count()).select_from(Workflow)))
-    assert client.post("/api/v1/demo/setup", headers=MANAGER).status_code == 200
+    assert client.post("/api/v1/demo/setup", headers=client.actors.admin).status_code == 200
     assert counts == (db.scalar(select(func.count()).select_from(Invoice)),
                       db.scalar(select(func.count()).select_from(Workflow)))
     workflows = client.get("/api/v1/workflows").json()
+    numbered = db.scalars(select(Invoice).where(Invoice.invoice_number == "ACME-1002")).all()
+    assert len(numbered) == 1 and numbered[0].invoice_date is not None
     assert {"Invoice Exception Review", "AI Invoice Exception Resolution"}.issubset(
         {workflow["name"] for workflow in workflows})
     assert all("definition" in workflow for workflow in workflows)

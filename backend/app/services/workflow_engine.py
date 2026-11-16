@@ -19,6 +19,7 @@ from app.schemas.workflow import WorkflowDefinition
 from app.services.invoice_validation import validate_invoice
 from app.services.ai_tools import investigate_invoice_tool
 from app.services.audit import record_audit_event
+from app.services.decisions import effective_decision
 from app.services.execution_lock import acquire_execution_lock
 
 logger = logging.getLogger(__name__)
@@ -94,7 +95,8 @@ def execute_workflow(
                 approval = db.scalar(select(ApprovalRequest).where(
                     ApprovalRequest.execution_id == execution.id
                 ))
-                if approval is None or approval.status != "APPROVED":
+                # Honour admin overrides; the original approval row is never edited.
+                if approval is None or effective_decision(db, approval) != "APPROVED":
                     raise ValueError("Invoice resolution requires manager approval")
                 invoice.status = "review_approved"
                 result = {"invoice_id": str(invoice.id), "status": invoice.status}
