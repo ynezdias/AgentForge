@@ -1,10 +1,10 @@
 "use client";
 import { useState } from "react";
-import { ArrowUpRight, CheckCircle2, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, LoaderCircle, ShieldCheck, Unplug } from "lucide-react";
 import { useWorkspace } from "@/components/Workspace";
 import { Loading, PageHeading, StatusBadge } from "@/components/UI";
 import ExecutionDetails from "@/components/ExecutionDetails";
-import type { WorkflowRun } from "@/lib/api";
+import { api, type WorkflowRun } from "@/lib/api";
 import { dateLabel, invoiceDateLabel, money, reference } from "@/lib/format";
 
 type Tab = { key: string; label: string; filter: (run: WorkflowRun) => boolean; empty: string };
@@ -21,11 +21,20 @@ const TABS: Record<"admin" | "company", Tab[]> = {
     { key: "waiting", label: "Awaiting review", filter: (r) => waiting(r) && !r.escalated_at, empty: "Your review queue is clear." },
     { key: "escalated", label: "With admin", filter: (r) => waiting(r) && !!r.escalated_at, empty: "Nothing is escalated to an admin." },
     { key: "decided", label: "Past decisions", filter: decided, empty: "No review decisions have been recorded yet." },
+    { key: "failed", label: "Needs attention", filter: (r) => r.status === "FAILED", empty: "No failed runs. Nothing needs a retry." },
   ],
 };
 
 export default function ApprovalsView() {
-  const { runs, invoices, loading, portal } = useWorkspace();
+  const { runs, invoices, loading, portal, refresh } = useWorkspace();
+  const [recovering, setRecovering] = useState(false);
+  const [recoverNote, setRecoverNote] = useState("");
+  async function recover() {
+    setRecovering(true); setRecoverNote("");
+    try { const { recovered } = await api.recoverInterrupted(); setRecoverNote(recovered ? `${recovered} interrupted run${recovered === 1 ? "" : "s"} can now be retried.` : "No interrupted runs found."); await refresh(); }
+    catch (err) { setRecoverNote(err instanceof Error ? err.message : "Recovery failed."); }
+    finally { setRecovering(false); }
+  }
   const tabs = TABS[portal];
   const [tabKey, setTabKey] = useState(tabs[0].key);
   const [selectedId, setSelectedId] = useState("");
@@ -38,7 +47,7 @@ export default function ApprovalsView() {
     title={portal === "admin" ? "Decide, override, or reopen." : "The final call is yours."}
     description={portal === "admin" ? "Escalations come first. Every override keeps the original decision and records your reason." : "Review the evidence and record a decision for each invoice exception, or escalate it to an admin."}
     action={<span className="badge exception">{pending} waiting for a decision</span>} />
-    {loading ? <Loading /> : <div className="approval-grid"><section className="card"><div className="toolbar"><div className="tabs" role="tablist">{tabs.map((t) => { const count = runs.filter(t.filter).length; return <button key={t.key} role="tab" className={`tab ${t.key === tab.key ? "active" : ""}`} aria-selected={t.key === tab.key} onClick={() => { setTabKey(t.key); setSelectedId(""); }}>{t.label} <span className="tab-count">{count}</span></button>; })}</div></div>
+    {loading ? <Loading /> : <div className="approval-grid"><section className="card"><div className="toolbar"><div className="tabs" role="tablist">{tabs.map((t) => { const count = runs.filter(t.filter).length; return <button key={t.key} role="tab" className={`tab ${t.key === tab.key ? "active" : ""}`} aria-selected={t.key === tab.key} onClick={() => { setTabKey(t.key); setSelectedId(""); }}>{t.label} <span className="tab-count">{count}</span></button>; })}</div>{portal === "admin" && tab.key === "failed" && <button className="button small secondary" disabled={recovering} onClick={() => void recover()} title="Find runs left unfinished by a crash or restart">{recovering ? <LoaderCircle size={13} className="spin" /> : <Unplug size={13} />}Recover interrupted runs</button>}</div>{recoverNote && <p className="help" role="status" style={{ padding: "0 22px" }}>{recoverNote}</p>}
       {items.length === 0 ? <div className="empty-small"><CheckCircle2 size={28} style={{ color: "#56a58a", margin: "0 auto 12px" }} /><p>{tab.empty}</p><p className="help">Exceptions appear here when a workflow requests approval.</p></div> : items.map((run) => { const invoice = invoices.find((item) => item.id === run.invoice_id); return <button key={run.execution_id} className={`approval-item ${chosenId === run.execution_id ? "selected" : ""}`} onClick={() => setSelectedId(run.execution_id)}>
         <div className="approval-item-top"><StatusBadge status={run.status} />{run.escalated_at && <span className="badge escalated"><ArrowUpRight size={10} />Escalated</span>}</div>
         <h3>{invoice?.vendor_name ?? "Supplier invoice"} {invoice && <span className="number" style={{ float: "right" }}>{money(invoice.amount, invoice.currency)}</span>}</h3>

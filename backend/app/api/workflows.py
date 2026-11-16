@@ -15,6 +15,8 @@ from app.models.workflow import ApprovalRequest, Workflow, WorkflowExecution, St
 from app.schemas.workflow import WorkflowDefinition
 from app.services.workflow_engine import execute_workflow
 from app.services.audit import record_audit_event
+from app.services.execution_lock import acquire_execution_lock
+from app.services.recovery import prepare_retry, retry_state
 
 
 router = APIRouter(prefix="/api/v1/workflows", tags=["Workflows"])
@@ -94,6 +96,7 @@ def execution_response(db: Session, execution: WorkflowExecution):
         "status": execution.status,
         "current_step": execution.current_step,
         "context": execution.context,
+        "retry": retry_state(execution),
         "approval": None if approval is None else {
             "status": approval.status, "decided_by": approval.decided_by,
             "decided_at": approval.decided_at,
@@ -194,3 +197,24 @@ def get_execution_audit(execution_id: uuid.UUID, db: Session = Depends(get_db),
     return [{"id": event.id, "event_type": event.event_type, "payload": event.payload,
              "actor_user_id": event.actor_user_id, "created_at": event.created_at}
             for event in events]
+
+
+@router.post("/executions/{execution_id}/retry")
+def retry_execution(execution_id: uuid.UUID, db: Session = Depends(get_db),
+                    user: User = Depends(get_current_user)):
+    """Resume a failed (or interrupted) run from the step that failed.
+
+    Safe to repeat: the lock and the FAILED-status check mean a second click
+    while the first retry runs gets 409 instead of starting a parallel run.
+    """
+    if not acquire_execution_lock(db, execution_id):
+        raise HTTPException(409, "This run is in progress; refresh to see its status")
+    execution = visible_execution(db, user, execution_id, for_update=True)
+    workflow = db.get(Workflow, execution.workflow_id)
+    try:
+        definition = WorkflowDefinition.model_validate(workflow.definition)
+    except ValueError:
+        raise HTTPException(422, "Stored workflow does not match the current workflow contract")
+    prepare_retry(db, execution, user)
+    db.commit()
+    return execution_response(db, execute_workflow(db, execution, definition))

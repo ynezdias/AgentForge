@@ -20,6 +20,7 @@ from app.services.invoice_validation import validate_invoice
 from app.services.ai_tools import investigate_invoice_tool
 from app.services.audit import record_audit_event
 from app.services.decisions import effective_decision
+from app.services.workflow_errors import describe_failure, failure_context
 from app.services.execution_lock import acquire_execution_lock
 
 logger = logging.getLogger(__name__)
@@ -163,11 +164,14 @@ def execute_workflow(
         if execution.status not in ("PENDING", "RUNNING") or execution.current_step != cursor:
             return execution
         previous_status = execution.status
+        code, message = describe_failure(exc)
+        failed_step = steps[cursor].id if cursor < len(steps) else None
         execution.status = "FAILED"
-        execution.context = {**dict(execution.context or {}), "error": str(exc)}
+        execution.context = {**dict(execution.context or {}),
+                             **failure_context(code, message, failed_step)}
         record_audit_event(db, execution.id, "EXECUTION_STATE_CHANGED", {
-            "from": previous_status, "to": "FAILED", "error": str(exc),
-            "current_step": execution.current_step,
+            "from": previous_status, "to": "FAILED", "error": message, "error_code": code,
+            "failed_step": failed_step, "current_step": execution.current_step,
         })
         db.commit()
         log_state(execution, "workflow_execution_failed")

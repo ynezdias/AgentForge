@@ -79,6 +79,15 @@ flowchart LR
 - **CSRF:** `SameSite=Lax` cookie plus an `Origin` check on state-changing requests in the proxy.
 - **Idempotency:** workflow runs require an `Idempotency-Key`. Repeating a key with the same input returns the original run; reusing it with different input returns `409`. Duplicate decisions and overrides return `409`. Reopen is idempotent per source run.
 
+## Reliability and recovery
+
+- **Automatic AI retries.** Temporary provider failures (HTTP 408, 429, 5xx such as "503 high demand", timeouts, dropped connections) are retried up to 3 times with exponential back-off, including when the SDK wraps the original error. Invalid requests, bad credentials, and malformed output fail immediately.
+- **Typed failures.** A failed run records why (`AI_UNAVAILABLE`, `AI_FAILED`, `INTERRUPTED`, `UNEXPECTED`, or `STEP_FAILED`), the step it stopped at, and whether retrying can help. Stored messages never contain provider details.
+- **Retry from the failed step.** `POST /api/v1/workflows/executions/{id}/retry` (owning company or admin) resumes at the failed step. Completed steps are not re-run, and the failed step's partial work was rolled back with its transaction, so a retry cannot duplicate an investigation or decision. Repeated clicks get `409`; business-rule failures are not retryable; each run allows 5 manual retries, after which an admin can reopen it.
+- **Interrupted runs.** If the process dies mid-step (for example during a Gemini call), the run is left `RUNNING`. A run still running 10 minutes after its last update *and* whose advisory lock is free is abandoned; it is marked `INTERRUPTED` and becomes retryable. This sweep runs at backend startup (`RECOVER_INTERRUPTED_ON_STARTUP=true`) and on demand via `POST /api/v1/admin/recover-interrupted`. Runs whose lock is held by a live worker are never touched.
+
+Verified live by killing the backend container during a real Gemini call: the run was recovered as interrupted at the investigation step and resumed to the approval gate with exactly one saved investigation.
+
 ---
 
 ## Run locally (Docker Compose)
@@ -133,11 +142,13 @@ All endpoints except login and `/health` require a bearer token. Through the web
 | GET / POST | `/api/v1/workflows` | Both (GET), admin (POST) | List or create workflow definitions |
 | POST | `/api/v1/workflows/{id}/execute` | Both (scoped) | Start a run; requires `Idempotency-Key` |
 | GET | `/api/v1/workflows/executions[/{id}[/audit]]` | Both (scoped) | Runs, run detail with decision record, run audit trail |
+| POST | `/api/v1/workflows/executions/{id}/retry` | Both (scoped) | Resume a failed or interrupted run from the failed step |
 | POST | `/api/v1/approvals/{execution_id}` | Company (own, not escalated), admin | Approve or reject |
 | POST | `/api/v1/approvals/{execution_id}/escalate` | Both (scoped) | Hand a pending decision to an admin (reason required) |
 | POST | `/api/v1/admin/executions/{id}/override` | Admin | Replace the effective decision (reason required) |
 | POST | `/api/v1/admin/executions/{id}/reopen` | Admin | Start a new linked run for the same invoice (reason required) |
 | GET | `/api/v1/admin/overview`, `/admin/companies`, `/admin/overrides` | Admin | Cross-company oversight |
+| POST | `/api/v1/admin/recover-interrupted` | Admin | Mark abandoned runs as interrupted and retryable |
 | GET | `/api/v1/activity` | Both (scoped) | Recent audit events with actors |
 | POST | `/api/v1/investigations/{invoice_id}` | Both (scoped) | Stand-alone AI investigation |
 | POST | `/api/v1/demo/setup` | Admin, non-production only | Load sample data |
@@ -167,7 +178,7 @@ cd ..\frontend
 npm run lint; npm run build
 ```
 
-The backend suite (105 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+The backend suite (114 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, AI error classification, retry from the failed step, retry limits, interrupted-run recovery, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
 
 GitHub Actions runs migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL with mocked Gemini, then frontend lint and build. CI never uses a real Gemini key.
 
@@ -175,14 +186,13 @@ GitHub Actions runs migrations, `alembic check` (model and migration drift), and
 
 ## Known limitations
 
-- **Synchronous AI calls.** A Gemini investigation runs inside the HTTP request (seconds, occasionally ~40 s). A background worker is not implemented.
-- **No recovery action for failed runs yet.** A run that fails (for example when Gemini is unavailable) can be reopened by an admin, but there is no in-place retry yet.
+- **Synchronous AI calls.** A Gemini investigation runs inside the HTTP request (seconds, occasionally ~40 s, longer while retrying). A background worker is not implemented; interrupted runs are recovered instead (see above).
+- **Interrupted runs are detected after 10 minutes**, at startup or when an admin runs recovery, not continuously.
 - **Content Security Policy does not restrict scripts yet.** It blocks framing, plugins, and foreign form targets; a nonce-based `script-src` is future work.
 - **Text PDFs only.** Scanned PDFs need manual entry; there is no OCR.
 - **Lists show up to 100 records** and have no pagination.
 - **No payment tracking.** "Review approved" records a review status only; amounts and payments are never changed.
 
-Failed-run recovery is scheduled for the next step.
 
 ---
 
@@ -194,7 +204,7 @@ Failed-run recovery is scheduled for the next step.
 - [x] Role-based authentication, multi-tenancy, escalation, auditable admin overrides and reopen
 - [x] Public homepage, Company portal, Admin portal, audit log
 - [x] Sign-in throttling, server-side logout, browser security headers
-- [ ] Retryable AI failures and failed-run recovery
+- [x] Retryable AI failures, retry from the failed step, interrupted-run recovery
 - [ ] Deployment (frontend, backend, managed PostgreSQL) and production configuration
 - [ ] Architecture diagrams, screenshots, and demo walkthrough
 

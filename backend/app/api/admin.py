@@ -24,6 +24,7 @@ from app.models.workflow import ApprovalRequest, Workflow, WorkflowExecution
 from app.schemas.workflow import WorkflowDefinition
 from app.services.audit import record_audit_event
 from app.services.decisions import effective_decision
+from app.services.recovery import recover_interrupted_runs
 from app.services.workflow_engine import execute_workflow
 
 router = APIRouter(prefix="/api/v1/admin", tags=["Admin oversight"])
@@ -115,6 +116,12 @@ def reopen(execution_id: uuid.UUID, payload: ReopenRequest,
                           {"invoice_id": str(invoice.id), "reopened_from": str(execution.id)},
                           key, execution.company_id, admin)
     return execution_response(db, new)
+
+
+@router.post("/recover-interrupted")
+def recover_interrupted(db: Session = Depends(get_db), admin: User = Depends(require_admin)):
+    """Mark abandoned runs (stuck after a crash or restart) as failed and retryable."""
+    return {"recovered": recover_interrupted_runs(db, admin)}
 
 
 @router.get("/overview")

@@ -13,6 +13,7 @@ from app.models.investigation import InvoiceInvestigation
 from app.schemas.investigation import InvestigationResult
 from app.services.investigation_agent import investigation_graph
 from app.services.invoice_validation import validate_invoice
+from app.services.retry_policy import TemporaryAIError, invoke_ai_with_retry
 
 
 router = APIRouter(prefix="/api/v1/investigations", tags=["AI Investigations"])
@@ -43,8 +44,11 @@ def investigate_invoice(invoice_id: uuid.UUID, db: Session = Depends(get_db),
         "validation": validation,
     })
     try:
-        state = investigation_graph.invoke({"invoice_facts": facts})
+        state = invoke_ai_with_retry(investigation_graph, facts)
         result = InvestigationResult.model_validate(state["investigation"])
+    except TemporaryAIError:
+        raise HTTPException(503, "The AI service is temporarily unavailable; try again shortly",
+                            headers={"Retry-After": "30"}) from None
     except Exception:
         # Provider errors may contain credentials or request data; keep them private.
         raise HTTPException(502, "AI investigation failed; no result was saved") from None

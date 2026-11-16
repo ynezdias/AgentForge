@@ -3,7 +3,8 @@ from fastapi.encoders import jsonable_encoder
 from app.schemas.investigation import InvestigationResult
 from app.services.investigation_agent import investigation_graph
 from app.services.invoice_validation import validate_invoice
-from app.services.retry_policy import invoke_ai_with_retry
+from app.services.retry_policy import TemporaryAIError, invoke_ai_with_retry
+from app.services.workflow_errors import AIInvestigationError, AIUnavailableError
 
 
 def investigate_invoice_tool(invoice, purchase_order):
@@ -25,10 +26,13 @@ def investigate_invoice_tool(invoice, purchase_order):
     try:
         output = invoke_ai_with_retry(investigation_graph, facts)
         recommendation = InvestigationResult.model_validate(output["investigation"])
+    except TemporaryAIError:
+        # Still unavailable after automatic retries; a person can retry later.
+        raise AIUnavailableError("AI service is temporarily unavailable") from None
     except Exception:
         # Provider exceptions can include credentials or request data. The
         # workflow persists errors, so expose only a safe message here.
-        raise RuntimeError("AI investigation failed") from None
+        raise AIInvestigationError("AI investigation failed") from None
     return {
         "skipped": False,
         "facts": facts,

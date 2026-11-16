@@ -20,6 +20,7 @@ export type Execution = WorkflowRun & {
   current_step: number; total_steps?: number; escalated_at?: string | null; reopened_from?: string | null;
   approval?: { status: string; decided_by: string | null; decided_at: string | null; effective_decision: string } | null;
   overrides?: Override[];
+  retry?: { attempt_count: number; max_retries: number; can_retry: boolean; stale: boolean };
   steps: Array<{ step_id: string; status: string; result: Record<string, unknown> }>;
 };
 export type Portal = "admin" | "company";
@@ -88,6 +89,8 @@ export const api = {
     method: "POST", headers: { "Content-Type": "application/json", "idempotency-key": key }, body: JSON.stringify({ invoice_id: invoiceId }),
   })),
   approveExecution: async (id: string, decision: "approve" | "reject") => execution(await apiRequest(`approvals/${encodeURIComponent(id)}`, { method: "POST", headers: json, body: JSON.stringify({ decision }) })),
+  retryExecution: async (id: string) => execution(await apiRequest(`workflows/executions/${encodeURIComponent(id)}/retry`, { method: "POST", headers: json })),
+  recoverInterrupted: async () => await apiRequest("admin/recover-interrupted", { method: "POST", headers: json }) as { recovered: number },
   escalate: async (id: string, reason: string) => execution(await apiRequest(`approvals/${encodeURIComponent(id)}/escalate`, { method: "POST", headers: json, body: JSON.stringify({ reason }) })),
   setupDemo: () => apiRequest("demo/setup", { method: "POST", headers: json }),
   login: async (email: string, password: string, portal: Portal) => await apiRequest("auth/login", { method: "POST", headers: json, body: JSON.stringify({ email, password, portal }) }) as { user: User; expires_at: string },
