@@ -34,6 +34,10 @@ class PurchaseOrder(Base):
         Numeric(14, 2), nullable=False
     )
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # NULL means unassigned legacy data, visible to admins only.
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True, index=True
+    )
 
     vendor: Mapped["Vendor"] = relationship()
 
@@ -63,6 +67,10 @@ class Invoice(Base):
     invoice_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     duplicate_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # NULL means unassigned legacy data, visible to admins only.
+    company_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("companies.id"), nullable=True, index=True
+    )
 
     vendor: Mapped["Vendor"] = relationship()
     purchase_order: Mapped["PurchaseOrder"] = relationship()
