@@ -11,6 +11,9 @@ from sqlalchemy.orm import Session
 from app.api.invoices import InvoiceCreate, create_invoice
 from app.db.session import engine
 from app.models.business import Invoice, PurchaseOrder, Vendor
+from app.models.audit import AuditEvent
+from app.models.identity import Company, User
+from tests.auth_helpers import make_company, make_user
 
 pytestmark = pytest.mark.skipif(os.environ.get("RUN_DB_TESTS") != "1", reason="Requires migrated PostgreSQL")
 
@@ -18,19 +21,22 @@ pytestmark = pytest.mark.skipif(os.environ.get("RUN_DB_TESTS") != "1", reason="R
 def test_simultaneous_duplicate_submissions():
     token = str(uuid4())
     with Session(engine) as db:
+        company = make_company(db)
+        member = make_user(db, "company", company)
         vendor = Vendor(name=f"Concurrency test {token}", external_ref=token)
         db.add(vendor)
         db.flush()
-        po = PurchaseOrder(vendor_id=vendor.id, total_amount=1000, currency="USD")
+        po = PurchaseOrder(vendor_id=vendor.id, total_amount=1000, currency="USD",
+                           company_id=company.id)
         db.add(po)
         db.commit()
-        vendor_id, po_id = vendor.id, po.id
+        vendor_id, po_id, company_id, member_id = vendor.id, po.id, company.id, member.id
     try:
         payload = InvoiceCreate(purchase_order_id=po_id, invoice_number="INV-1", invoice_date="2026-11-01", amount="1000", currency="USD")
         def submit(_):
             with Session(engine) as db:
                 try:
-                    return (201, str(create_invoice(payload, db).id))
+                    return (201, str(create_invoice(payload, db, db.get(User, member_id)).id))
                 except HTTPException as exc:
                     return (exc.status_code, exc.detail["invoice_id"])
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -41,7 +47,10 @@ def test_simultaneous_duplicate_submissions():
             assert len(db.scalars(select(Invoice).where(Invoice.vendor_id == vendor_id)).all()) == 1
     finally:
         with Session(engine) as db:
+            db.execute(delete(AuditEvent).where(AuditEvent.company_id == company_id))
             db.execute(delete(Invoice).where(Invoice.vendor_id == vendor_id))
             db.execute(delete(PurchaseOrder).where(PurchaseOrder.id == po_id))
             db.execute(delete(Vendor).where(Vendor.id == vendor_id))
+            db.execute(delete(User).where(User.id == member_id))
+            db.execute(delete(Company).where(Company.id == company_id))
             db.commit()

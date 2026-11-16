@@ -16,16 +16,37 @@ from app.services.invoice_identity import invoice_duplicate_key
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    from app.api import invoices
+    from app.models.identity import Company, User
+    from tests.auth_helpers import headers, make_company, make_user
+
+    # audit_events uses PostgreSQL JSONB; audit rows are covered by the PostgreSQL suite.
+    monkeypatch.setattr(invoices, "record_audit_event", lambda *args, **kwargs: None)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(engine, tables=[Vendor.__table__, PurchaseOrder.__table__, Invoice.__table__])
+    Base.metadata.create_all(engine, tables=[Company.__table__, User.__table__, Vendor.__table__,
+                                             PurchaseOrder.__table__, Invoice.__table__])
     with Session(engine) as session:
+        member = make_user(session, "company", make_company(session))
+        admin = make_user(session, "admin")
+        session.commit()
         app.dependency_overrides[get_db] = lambda: session
         try:
-            yield TestClient(app)
+            client = TestClient(app, headers=headers(member))
+            client.admin = headers(admin)
+            yield client
         finally:
             app.dependency_overrides.pop(get_db, None)
     engine.dispose()
+
+
+def test_invoice_endpoints_require_company_login(client):
+    anonymous = {"Authorization": ""}
+    assert client.get("/api/v1/invoices", headers=anonymous).status_code == 401
+    assert client.post("/api/v1/invoices", json=numbered_invoice(), headers=anonymous).status_code == 401
+    # Admins oversee invoices but do not submit them on a company's behalf.
+    assert client.post("/api/v1/invoices", json=numbered_invoice(), headers=client.admin).status_code == 403
+    assert client.post("/api/v1/invoices/extract-pdf", json={"content": "x"}, headers=client.admin).status_code == 403
 
 
 def test_manual_entry_and_existing_po(client):
