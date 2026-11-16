@@ -38,17 +38,17 @@ def test_token_round_trip_and_tampering():
 def test_expired_and_foreign_tokens_rejected():
     now = datetime.now(timezone.utc)
     secret = security._secret()
-    expired = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge",
+    expired = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge", "jti": "t",
                           "iat": now - timedelta(hours=2), "exp": now - timedelta(hours=1)},
                          secret, algorithm="HS256")
     with pytest.raises(jwt.ExpiredSignatureError):
         decode_access_token(expired)
-    forged = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge",
+    forged = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge", "jti": "t",
                          "iat": now, "exp": now + timedelta(hours=1)},
                         "a-different-secret-that-is-long-enough!!", algorithm="HS256")
     with pytest.raises(jwt.InvalidSignatureError):
         decode_access_token(forged)
-    unsigned = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge",
+    unsigned = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge", "jti": "t",
                            "iat": now, "exp": now + timedelta(hours=1)}, None, algorithm="none")
     with pytest.raises(jwt.InvalidTokenError):
         decode_access_token(unsigned)
@@ -59,3 +59,11 @@ def test_missing_or_weak_secret_fails_closed(monkeypatch, secret):
     monkeypatch.setenv("AUTH_SECRET_KEY", secret)
     with pytest.raises(AuthConfigurationError):
         create_access_token(uuid.uuid4(), "admin", 0)
+
+
+def test_token_without_id_is_rejected():
+    now = datetime.now(timezone.utc)
+    token = jwt.encode({"sub": "x", "role": "admin", "ver": 0, "iss": "agentforge",
+                        "iat": now, "exp": now + timedelta(hours=1)}, security._secret(), algorithm="HS256")
+    with pytest.raises(jwt.MissingRequiredClaimError):
+        decode_access_token(token)  # Without a jti the token could never be revoked.

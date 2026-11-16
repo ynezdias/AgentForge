@@ -46,3 +46,27 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     company: Mapped["Company | None"] = relationship()
+
+
+class LoginThrottle(Base):
+    """Failed sign-in counters keyed by hashed email or client IP.
+
+    Keys exist for unknown emails too, so throttling behaves identically
+    whether or not an account exists (no account enumeration via 429s).
+    """
+
+    __tablename__ = "login_throttles"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    window_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RevokedToken(Base):
+    """Tokens signed out before expiry. Rows can be deleted once expires_at passes."""
+
+    __tablename__ = "revoked_tokens"
+
+    jti: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)

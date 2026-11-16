@@ -34,6 +34,9 @@ async function forward(request: NextRequest, apiPath: string, token?: string) {
   }
   // Never trust an Authorization header from the browser; only the cookie counts.
   if (token) headers.set("authorization", `Bearer ${token}`);
+  // Client address for sign-in throttling (the backend trusts it only when configured to).
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
   const url = new URL(`/api/v1/${apiPath}`, BACKEND_URL);
   url.search = request.nextUrl.search;
   return fetch(url, {
@@ -53,7 +56,10 @@ async function login(request: NextRequest) {
   return result;
 }
 
-function logout(request: NextRequest) {
+async function logout(request: NextRequest) {
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  // Revoke the token server-side first; clear the cookie even if the backend is unreachable.
+  if (token) await forward(request, "auth/logout", token).catch(() => undefined);
   const result = NextResponse.json({ status: "signed_out" });
   result.cookies.set(sessionCookie(request, "", 0));
   return result;
@@ -68,7 +74,7 @@ async function proxy(request: NextRequest, context: RouteContext) {
   const apiPath = path.map(encodeURIComponent).join("/");
   try {
     if (request.method === "POST" && apiPath === "auth/login") return await login(request);
-    if (request.method === "POST" && apiPath === "auth/logout") return logout(request);
+    if (request.method === "POST" && apiPath === "auth/logout") return await logout(request);
     const response = await forward(request, apiPath, request.cookies.get(SESSION_COOKIE)?.value);
     const result = new NextResponse(response.body, {
       status: response.status,

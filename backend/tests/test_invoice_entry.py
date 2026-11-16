@@ -18,13 +18,13 @@ from app.services.invoice_identity import invoice_duplicate_key
 @pytest.fixture
 def client(monkeypatch):
     from app.api import invoices
-    from app.models.identity import Company, User
+    from app.models.identity import Company, RevokedToken, User
     from tests.auth_helpers import headers, make_company, make_user
 
     # audit_events uses PostgreSQL JSONB; audit rows are covered by the PostgreSQL suite.
     monkeypatch.setattr(invoices, "record_audit_event", lambda *args, **kwargs: None)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    Base.metadata.create_all(engine, tables=[Company.__table__, User.__table__, Vendor.__table__,
+    Base.metadata.create_all(engine, tables=[Company.__table__, User.__table__, RevokedToken.__table__, Vendor.__table__,
                                              PurchaseOrder.__table__, Invoice.__table__])
     with Session(engine) as session:
         member = make_user(session, "company", make_company(session))

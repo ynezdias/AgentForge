@@ -21,6 +21,8 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
       AUTH_SECRET_KEY: ${AUTH_SECRET_KEY:?Set AUTH_SECRET_KEY}
       APP_ENV: ${APP_ENV:-development}
+      # The API port is bound to localhost and only the frontend proxy reaches it in Compose.
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-true}
       ENABLE_DEMO_SETUP: "true"
       # Read only by `python -m app.db.seed_users`; refused when APP_ENV=production.
       DEMO_COMPANY_NAME: ${DEMO_COMPANY_NAME:-DevForge}

@@ -71,7 +71,9 @@ flowchart LR
 
 - **Passwords:** salted `scrypt` (standard library), constant-time comparison. Unknown emails take the same time as wrong passwords.
 - **Sessions:** HS256 JWT, 8-hour expiry, signed with `AUTH_SECRET_KEY` (32+ characters; the server fails closed without it). The user is re-loaded on every request, so deactivating a user or bumping `token_version` revokes their tokens immediately.
-- **Token handling:** the token lives only in an `HttpOnly` cookie (`Secure` over HTTPS) and never reaches browser JavaScript.
+- **Token handling:** the token lives only in an `HttpOnly` cookie (`Secure` over HTTPS) and never reaches browser JavaScript. Signing out revokes that token server-side (by its `jti`), so a copied token stops working immediately.
+- **Sign-in throttling:** 5 failed attempts for an email, or 20 from one client IP, within 15 minutes lock sign-in for 15 minutes (`429` with `Retry-After`). Unknown emails are counted exactly like real ones, so lockouts never reveal which accounts exist. Counters live in PostgreSQL, so they hold across restarts and multiple workers. The IP limit trusts `X-Forwarded-For` only when `TRUST_PROXY_HEADERS=true`.
+- **Browser headers:** `frame-ancestors 'none'` and `X-Frame-Options: DENY` (no framing), `nosniff`, a strict referrer policy, and no `X-Powered-By`.
 - **Authorization:** company users only ever see their company's rows. Only company users submit invoices; only admins create workflow templates, use `/admin/*`, override, or reopen. Escalated exceptions can only be decided by an admin.
 - **Demo accounts** are created by an explicit seed script from environment variables, flagged `is_demo`, and **refused at login when `APP_ENV=production`**. The seed script and the demo-data endpoint also refuse to run in production.
 - **CSRF:** `SameSite=Lax` cookie plus an `Origin` check on state-changing requests in the proxy.
@@ -165,7 +167,7 @@ cd ..\frontend
 npm run lint; npm run build
 ```
 
-The backend suite (96 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+The backend suite (105 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
 
 GitHub Actions runs migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL with mocked Gemini, then frontend lint and build. CI never uses a real Gemini key.
 
@@ -175,13 +177,12 @@ GitHub Actions runs migrations, `alembic check` (model and migration drift), and
 
 - **Synchronous AI calls.** A Gemini investigation runs inside the HTTP request (seconds, occasionally ~40 s). A background worker is not implemented.
 - **No recovery action for failed runs yet.** A run that fails (for example when Gemini is unavailable) can be reopened by an admin, but there is no in-place retry yet.
-- **Logout clears the cookie only.** A copied token stays valid until it expires (at most 8 hours) unless the user's `token_version` is bumped.
-- **No login rate limiting yet.**
+- **Content Security Policy does not restrict scripts yet.** It blocks framing, plugins, and foreign form targets; a nonce-based `script-src` is future work.
 - **Text PDFs only.** Scanned PDFs need manual entry; there is no OCR.
 - **Lists show up to 100 records** and have no pagination.
 - **No payment tracking.** "Review approved" records a review status only; amounts and payments are never changed.
 
-The first four are scheduled for the next step.
+Failed-run recovery is scheduled for the next step.
 
 ---
 
@@ -192,7 +193,8 @@ The first four are scheduled for the next step.
 - [x] Gemini investigation with schema validation and safe failure handling
 - [x] Role-based authentication, multi-tenancy, escalation, auditable admin overrides and reopen
 - [x] Public homepage, Company portal, Admin portal, audit log
-- [ ] Hardening: login rate limiting, token revocation on logout, retryable AI failures, failed-run recovery
+- [x] Sign-in throttling, server-side logout, browser security headers
+- [ ] Retryable AI failures and failed-run recovery
 - [ ] Deployment (frontend, backend, managed PostgreSQL) and production configuration
 - [ ] Architecture diagrams, screenshots, and demo walkthrough
 
@@ -204,4 +206,4 @@ The first four are scheduled for the next step.
 
 ## License
 
-See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

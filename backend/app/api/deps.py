@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.security import AuthConfigurationError, decode_access_token, is_production
 from app.db.session import get_db
 from app.models.business import Invoice
-from app.models.identity import User
+from app.models.identity import RevokedToken, User
 from app.models.workflow import WorkflowExecution
 
 UNAUTHORIZED = HTTPException(401, "Sign in to continue", headers={"WWW-Authenticate": "Bearer"})
@@ -32,6 +32,8 @@ def get_current_user(authorization: str | None = Header(default=None),
         raise HTTPException(503, "Authentication is not configured on the server") from None
     except (jwt.InvalidTokenError, ValueError, KeyError):
         raise UNAUTHORIZED from None
+    if db.get(RevokedToken, claims["jti"]) is not None:
+        raise UNAUTHORIZED
     user = db.get(User, user_id)
     if (user is None or not user.is_active or user.token_version != claims["ver"]
             or user.role != claims["role"] or (user.is_demo and is_production())):

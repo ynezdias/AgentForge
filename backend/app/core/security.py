@@ -97,4 +97,4 @@ def create_access_token(user_id: uuid.UUID, role: str, token_version: int) -> tu
 def decode_access_token(token: str) -> dict:
     """Raise jwt.InvalidTokenError on any tampering, expiry, or malformed input."""
     return jwt.decode(token, _secret(), algorithms=[TOKEN_ALGORITHM], issuer=TOKEN_ISSUER,
-                      options={"require": ["sub", "role", "ver", "exp", "iat"]})
+                      options={"require": ["sub", "role", "ver", "exp", "iat", "jti"]})
