@@ -8,8 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.api.deps import get_current_user, require_company, scoped, visible_invoice
 from app.db.session import get_db
 from app.models.business import Invoice, PurchaseOrder, Vendor
+from app.models.identity import User
+from app.services.audit import record_audit_event
 from app.services.invoice_validation import validate_invoice
 from app.services.invoice_identity import invoice_duplicate_key, normalize_identity
 
@@ -53,13 +56,15 @@ class InvoiceResponse(InvoiceCreate):
     purchase_order_amount: Decimal | None = None
     purchase_order_currency: str | None = None
     validation: dict | None = None
+    company_id: uuid.UUID | None = None
 
 
 @router.post("", response_model=InvoiceResponse, status_code=201)
-def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
+def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db),
+                   user: User = Depends(require_company)):
     if payload.purchase_order_id:
         po = db.get(PurchaseOrder, payload.purchase_order_id)
-        if not po:
+        if not po or po.company_id != user.company_id:
             raise HTTPException(404, "Purchase order not found")
         vendor_id = payload.vendor_id or po.vendor_id
         vendor = db.get(Vendor, vendor_id)
@@ -75,10 +80,11 @@ def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
             db.add(vendor)
             db.flush()
         vendor_id = vendor.id
-        po = PurchaseOrder(vendor_id=vendor_id, total_amount=payload.po_amount, currency=payload.currency)
+        po = PurchaseOrder(vendor_id=vendor_id, total_amount=payload.po_amount, currency=payload.currency,
+                           company_id=user.company_id)
         db.add(po)
         db.flush()
-    key = invoice_duplicate_key(vendor.name, payload.invoice_number)
+    key = invoice_duplicate_key(vendor.name, payload.invoice_number, user.company_id)
     def reject_duplicate(existing):
         db.rollback()
         raise HTTPException(409, {"code": "DUPLICATE_INVOICE", "message": "An invoice with this supplier and invoice number already exists. Open it instead of submitting again.",
@@ -91,10 +97,15 @@ def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
     invoice = Invoice(vendor_id=vendor_id, purchase_order_id=po.id,
                       amount=payload.amount, currency=payload.currency,
                       invoice_number=payload.invoice_number, invoice_date=payload.invoice_date,
-                      due_date=payload.due_date, duplicate_key=key)
+                      due_date=payload.due_date, duplicate_key=key, company_id=user.company_id)
 
     db.add(invoice)
     try:
+        db.flush()
+        record_audit_event(db, None, "INVOICE_SUBMITTED", {
+            "invoice_number": invoice.invoice_number, "amount": invoice.amount,
+            "currency": invoice.currency, "supplier": vendor.name,
+        }, actor=user, invoice_id=invoice.id)
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -108,9 +119,9 @@ def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
 
 
 @router.get("/purchase-orders")
-def purchase_orders(db: Session = Depends(get_db)):
-    from sqlalchemy import select
-    orders = db.scalars(select(PurchaseOrder).options(selectinload(PurchaseOrder.vendor)).order_by(PurchaseOrder.id)).all()
+def purchase_orders(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    statement = scoped(select(PurchaseOrder), PurchaseOrder.company_id, user)
+    orders = db.scalars(statement.options(selectinload(PurchaseOrder.vendor)).order_by(PurchaseOrder.id)).all()
     return [{"id": str(po.id), "vendor_name": po.vendor.name, "amount": str(po.total_amount),
              "currency": po.currency} for po in orders]
 
@@ -120,16 +131,14 @@ class PDFUpload(BaseModel):
 
 
 @router.post("/extract-pdf")
-def extract_pdf(payload: PDFUpload):
+def extract_pdf(payload: PDFUpload, user: User = Depends(require_company)):
     from app.services.invoice_pdf import extract_invoice_pdf
     return extract_invoice_pdf(payload.content)
 
 
 @router.get("", response_model=list[InvoiceResponse])
-def list_invoices(db: Session = Depends(get_db)):
-    from sqlalchemy import select
-
-    invoices = db.scalars(select(Invoice).options(
+def list_invoices(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    invoices = db.scalars(scoped(select(Invoice), Invoice.company_id, user).options(
         selectinload(Invoice.vendor), selectinload(Invoice.purchase_order)
     ).order_by(Invoice.id).limit(100)).all()
     results = []
@@ -149,11 +158,9 @@ def list_invoices(db: Session = Depends(get_db)):
 
 
 @router.get("/{invoice_id}/validate")
-def check_invoice(invoice_id: uuid.UUID, db: Session = Depends(get_db)):
-    invoice = db.get(Invoice, invoice_id)
-
-    if not invoice:
-        raise HTTPException(404, "Invoice not found")
+def check_invoice(invoice_id: uuid.UUID, db: Session = Depends(get_db),
+                  user: User = Depends(get_current_user)):
+    invoice = visible_invoice(db, user, invoice_id)
 
     po = db.get(PurchaseOrder, invoice.purchase_order_id)
 
