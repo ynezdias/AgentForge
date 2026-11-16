@@ -178,9 +178,32 @@ cd ..\frontend
 npm run lint; npm run build
 ```
 
-The backend suite (114 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, AI error classification, retry from the failed step, retry limits, interrupted-run recovery, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+### Browser end-to-end tests (Playwright)
 
-GitHub Actions runs migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL with mocked Gemini, then frontend lint and build. CI never uses a real Gemini key.
+The E2E suite drives the real UI in both portals against an isolated stack that Playwright starts itself: a disposable PostgreSQL, FastAPI on port 8100 with a **fake AI provider**, and the production Next.js build on port 3100. It creates its own test accounts and never touches your dev stack or calls Gemini.
+
+```powershell
+docker run -d --name agentforge-e2edb -e POSTGRES_USER=agentforge -e POSTGRES_PASSWORD=e2eonly -e POSTGRES_DB=agentforge_e2e -p 127.0.0.1:55433:5432 postgres:16
+cd frontend
+npm run build
+$env:E2E_DATABASE_URL = "postgresql+psycopg://agentforge:e2eonly@127.0.0.1:55433/agentforge_e2e"
+$env:E2E_PYTHON = ".venv\Scripts\python.exe"   # relative to backend/
+$env:PW_CHANNEL = "msedge"                      # reuse an installed browser, or run: npx playwright install chromium
+npm run test:e2e
+docker rm -f agentforge-e2edb
+```
+
+| Spec | What it proves in the browser |
+|---|---|
+| `public-and-auth` | Homepage and security headers; anonymous visitors redirected to the right sign-in; wrong password; admin blocked from the company portal; return to the requested page after sign-in; session cookie is `HttpOnly` and `SameSite=Lax` and invisible to JavaScript; sign-out ends the session |
+| `company-journey` | Add an invoice through the form; duplicate blocked and "Open existing invoice" works; AI investigation pauses for a person, who approves; rejection; a matching invoice completes with no AI call |
+| `oversight-and-recovery` | Company escalates (reason enforced); admin decides, then overrides with a reason; the original decision stays in the record; the company sees the override; it appears in the audit log; an AI outage shows a clear panel and **Retry** resumes the run; admin dashboard |
+
+The fake provider (`AI_PROVIDER=fake`) returns a fixed, schema-valid recommendation and simulates a "503 high demand" outage for invoice totals ending in `.13`. It is refused when `APP_ENV=production`.
+
+The backend suite (116 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, AI error classification, retry from the failed step, retry limits, interrupted-run recovery, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+
+GitHub Actions runs three jobs: (1) migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL; (2) frontend lint and build; (3) the Playwright E2E suite against a full stack with the fake AI provider, uploading the report when a test fails. CI never uses a real Gemini key.
 
 ---
 
@@ -205,6 +228,7 @@ GitHub Actions runs migrations, `alembic check` (model and migration drift), and
 - [x] Public homepage, Company portal, Admin portal, audit log
 - [x] Sign-in throttling, server-side logout, browser security headers
 - [x] Retryable AI failures, retry from the failed step, interrupted-run recovery
+- [x] Browser end-to-end tests for both portals, in CI
 - [ ] Deployment (frontend, backend, managed PostgreSQL) and production configuration
 - [ ] Architecture diagrams, screenshots, and demo walkthrough
 

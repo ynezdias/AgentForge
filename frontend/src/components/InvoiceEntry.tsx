@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, DuplicateInvoiceError } from "@/lib/api";
 import Link from "next/link";
 import { money, reference } from "@/lib/format";
+import { useWorkspace } from "./Workspace";
 
 export default function InvoiceEntry({ onSaved, onCancel }: { onSaved: (id: string) => Promise<void>; onCancel: () => void }) {
   const [orders, setOrders] = useState<Awaited<ReturnType<typeof api.getPurchaseOrders>>>([]);
@@ -21,6 +22,7 @@ export default function InvoiceEntry({ onSaved, onCancel }: { onSaved: (id: stri
   const [notice, setNotice] = useState("");
   const [preview, setPreview] = useState("");
   const lock = useRef(false);
+  const { base } = useWorkspace();
   useEffect(() => { api.getPurchaseOrders().then(setOrders).catch((err) => setError(err.message)); }, []);
   async function upload(file?: File) {
     if (!file || lock.current) return;
@@ -59,6 +61,6 @@ export default function InvoiceEntry({ onSaved, onCancel }: { onSaved: (id: stri
       <label className="field-label" htmlFor="entry-amount">Invoice total</label><input className="field" id="entry-amount" type="number" min="0.01" max="999999999999.99" step="0.01" required value={amount} onChange={(e) => setAmount(e.target.value)} />
       <label className="field-label" htmlFor="entry-currency">Invoice currency</label><input className="field" id="entry-currency" required pattern="[A-Z]{3}" maxLength={3} value={currency} onChange={(e) => setCurrency(e.target.value.toUpperCase())} />
       <button className="button primary" style={{ marginTop: 16 }} type="submit">{busy ? "Processing…" : "Save invoice"}</button>
-    </fieldset></form>{error && <p role="alert" className="error-text">{savedId ? "Invoice saved, but the queue could not refresh. Open the saved invoice or refresh this page." : error}</p>}{(duplicateId || savedId) && <Link className="button" href={`/invoices?invoice=${encodeURIComponent(duplicateId || savedId)}`} onClick={onCancel}>{duplicateId ? "Open existing invoice" : "Open saved invoice"}</Link>}
+    </fieldset></form>{error && <p role="alert" className="error-text">{savedId ? "Invoice saved, but the queue could not refresh. Open the saved invoice or refresh this page." : error}</p>}{(duplicateId || savedId) && <Link className="button" href={`${base}/invoices?invoice=${encodeURIComponent(duplicateId || savedId)}`} onClick={onCancel}>{duplicateId ? "Open existing invoice" : "Open saved invoice"}</Link>}
   </div></section>;
 }

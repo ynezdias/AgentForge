@@ -56,3 +56,25 @@ def test_provider_error_is_sanitized(monkeypatch):
     monkeypatch.setattr(ai_tools, "investigation_graph", FailedGraph())
     with pytest.raises(RuntimeError, match="^AI investigation failed$"):
         ai_tools.investigate_invoice_tool(*invoice_pair())
+
+
+def test_fake_provider_is_deterministic_and_simulates_outage(monkeypatch):
+    from app.services import fake_ai
+    from app.services.retry_policy import invoke_ai_with_retry
+    monkeypatch.setenv("AI_PROVIDER", "fake")
+    monkeypatch.setattr(ai_tools, "invoke_ai_with_retry", invoke_ai_with_retry.retry_with(sleep=lambda _: None))
+    fake_ai._outage_calls.clear()
+    result = ai_tools.investigate_invoice_tool(*invoice_pair())
+    assert result["recommendation"]["recommended_action"] == "REQUEST_CORRECTION"
+    outage = invoice_pair("1150.13")
+    with pytest.raises(ai_tools.AIUnavailableError):
+        ai_tools.investigate_invoice_tool(*outage)  # Three 503s exhaust automatic retries.
+    assert ai_tools.investigate_invoice_tool(*outage)["skipped"] is False  # Recovered on retry.
+
+
+def test_fake_provider_refused_in_production(monkeypatch):
+    from app.services.fake_ai import fake_ai_enabled
+    monkeypatch.setenv("AI_PROVIDER", "fake")
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="not allowed"):
+        fake_ai_enabled()

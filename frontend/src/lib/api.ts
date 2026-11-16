@@ -47,11 +47,13 @@ function execution(value: unknown): Execution {
 export class DuplicateInvoiceError extends Error {
   constructor(message: string, public invoiceId: string) { super(message); this.name = "DuplicateInvoiceError"; }
 }
+// Set during sign-out so in-flight requests that now get 401 don't race the logout navigation.
+let signingOut = false;
 async function apiRequest(path: string, options?: RequestInit): Promise<unknown> {
   let response: Response;
   try { response = await fetch(`/api/backend/${path}`, { ...options, cache: "no-store" }); }
   catch { throw new Error("Cannot connect to AgentForge. Check that the application is running and try again."); }
-  if (response.status === 401 && path !== "auth/login" && typeof window !== "undefined") {
+  if (response.status === 401 && path !== "auth/login" && !signingOut && typeof window !== "undefined") {
     // Session expired or revoked: return to this portal's sign-in page.
     const portal = window.location.pathname.startsWith("/admin") ? "admin" : "company";
     // Outside React, so a full navigation (which also drops stale client state) is intended.
@@ -94,7 +96,7 @@ export const api = {
   escalate: async (id: string, reason: string) => execution(await apiRequest(`approvals/${encodeURIComponent(id)}/escalate`, { method: "POST", headers: json, body: JSON.stringify({ reason }) })),
   setupDemo: () => apiRequest("demo/setup", { method: "POST", headers: json }),
   login: async (email: string, password: string, portal: Portal) => await apiRequest("auth/login", { method: "POST", headers: json, body: JSON.stringify({ email, password, portal }) }) as { user: User; expires_at: string },
-  logout: () => apiRequest("auth/logout", { method: "POST", headers: json }),
+  logout: () => { signingOut = true; return apiRequest("auth/logout", { method: "POST", headers: json }); },
   me: async () => await apiRequest("auth/me") as User,
   activity: async (limit = 50) => array<ActivityEvent>(await apiRequest(`activity?limit=${limit}`), (item) => object(item) && typeof item.id === "string" && typeof item.event_type === "string"),
   adminOverview: async () => await apiRequest("admin/overview") as AdminOverview,

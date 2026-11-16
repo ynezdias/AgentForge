@@ -1,6 +1,7 @@
 from fastapi.encoders import jsonable_encoder
 
 from app.schemas.investigation import InvestigationResult
+from app.services.fake_ai import fake_ai_enabled, fake_graph
 from app.services.investigation_agent import investigation_graph
 from app.services.invoice_validation import validate_invoice
 from app.services.retry_policy import TemporaryAIError, invoke_ai_with_retry
@@ -24,7 +25,8 @@ def investigate_invoice_tool(invoice, purchase_order):
         "policy_threshold_percentage": "5",
     }
     try:
-        output = invoke_ai_with_retry(investigation_graph, facts)
+        graph = fake_graph if fake_ai_enabled() else investigation_graph
+        output = invoke_ai_with_retry(graph, facts)
         recommendation = InvestigationResult.model_validate(output["investigation"])
     except TemporaryAIError:
         # Still unavailable after automatic retries; a person can retry later.
