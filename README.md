@@ -1,601 +1,207 @@
-
 # AgentForge
 
-## Run with Docker Compose
+**AI-assisted invoice exception management with human approval and admin oversight.**
 
-Copy `.env.example` to `.env` in the repository root, then replace its password
-and Gemini key placeholders. Use a strong URL-safe database password (letters,
-digits, `-`, `_`) because it is interpolated into `DATABASE_URL`. Real `.env`
-files are ignored by Git and excluded from Docker build contexts.
+AgentForge checks supplier invoices against their purchase orders, uses an LLM to investigate the ones that don't match, and routes every exception to a person for the decision. A separate admin portal oversees all companies: admins can take over escalated cases, override decisions with a written reason, and review a complete audit history.
 
-```powershell
-docker compose up --build -d
-docker compose exec backend alembic upgrade head
-docker compose ps
-```
+The design principle is a strict split of authority:
 
-Open the dashboard at http://localhost:3000, health at
-http://localhost:8000/health, and Swagger at http://localhost:8000/docs.
-Stop local development servers on ports 3000 and 8000 before starting Compose.
-If Windows reserves port 8000, set `BACKEND_PORT=18000` in the root `.env` and
-use http://localhost:18000/health and http://localhost:18000/docs instead.
-This changes only the host port; the frontend proxy continues to use the
-backend service's internal port 8000.
-The Next.js production server proxies API requests to `http://backend:8000`;
-PostgreSQL is accessible only on the Compose network.
-The frontend Docker image uses Next.js standalone output and runs as the
-unprivileged `node` user. Build dependencies stay in the builder stage.
+| Part | Role | Can | Cannot |
+|---|---|---|---|
+| **Business rules** | Deterministic | Decide whether an invoice is an exception (5% amount tolerance, vendor and currency match) | Guess or interpret |
+| **AI investigation** (Gemini) | Advisory | Summarise the discrepancy, rate risk, recommend an action | Approve, reject, or change an invoice or payment |
+| **People** | Authoritative | Approve, reject, escalate; admins override or reopen with a reason | Erase an earlier decision |
 
-Compose creates its own `postgres_data` volume. It does **not** reuse or delete
-the original standalone `agentforge-postgres` database. The new database is
-empty after migration; sample records can be added explicitly with:
-
-```powershell
-docker compose exec backend python -m app.db.seed
-```
-
-Workflow definitions must also be created through the API before they can be
-selected in Invoice Operations. Gemini access is independent of container
-health; a reachable dashboard does not verify live model connectivity.
-
-```powershell
-docker compose logs --tail=50 backend frontend
-docker compose down
-docker compose up -d
-```
-
-`down` preserves database data. Do not pass `-v` unless deleting that data is
-intentional. Workflow logs are JSON with execution/step IDs and statuses, not
-invoice documents or AI prompts. Exception logs include the exception class
-without raw exception content. Credentials stay in the runtime environment,
-not the images; anyone with Docker administrator access can inspect container
-environments.
-
-GitHub Actions runs backend migrations and all database tests against an
-ephemeral PostgreSQL service with mocked Gemini, then frontend lint/build in a
-separate job. CI uses test-only credentials, never your local Gemini key.
-The workflow runs after pushing the files or opening a pull request; adding it
-locally does not start a GitHub run or deploy to a public host.
-
-### From business requirements to executable AI workflows.
-
-AgentForge is an AI-powered enterprise workflow automation platform that transforms natural-language business requirements into structured, validated, and executable workflows.
-
-Instead of manually configuring complex automation pipelines, users describe what they want to automate. AgentForge interprets the requirement, generates a workflow, integrates with supported business systems, and executes actions with human oversight.
-
-The project focuses on reliable AI orchestration, enterprise integrations, workflow execution, and production-oriented software engineering.
-
-> **Project Status:** In Development  
-> **Initial Use Case:** Invoice Exception Management  
-> **Development Timeline:** 10–11 Day MVP
+> **Status:** Feature-complete for local use and fully tested locally. Not yet deployed. See [Roadmap](#roadmap) and [Known limitations](#known-limitations).
 
 ---
 
-## 1. Overview
-
-Businesses rely on multiple software systems to manage operations, including databases, accounting platforms, CRMs, and internal applications.
-
-Automating processes across these systems often requires custom integrations, manually configured workflows, and significant engineering effort.
-
-AgentForge aims to simplify this process by combining:
-
-- Natural-language workflow generation
-- AI agent orchestration
-- Structured tool calling
-- Enterprise API integrations
-- Stateful workflow execution
-- Human-in-the-loop approvals
-- Execution monitoring and audit trails
-
-The goal is to build a system where AI assists with workflow creation and decision-making while deterministic backend services control execution.
-
-## 2. Problem Statement
-
-Traditional workflow automation presents several challenges:
-
-**Complex configuration:** Business users often need technical expertise to define triggers, conditions, and actions.
-
-**Disconnected systems:** Enterprise data is distributed across databases, APIs, and third-party applications.
-
-**Limited flexibility:** Rule-based automation struggles with ambiguous or unstructured information.
-
-**Reliability concerns:** Failed executions, repeated events, and partial updates can cause inconsistent business records.
-
-**Lack of oversight:** AI-generated actions require validation, authorization, and traceability before execution.
-
-AgentForge addresses these challenges through a controlled AI-assisted workflow engine.
-
-## 3. Proposed Solution
-
-AgentForge converts a natural-language instruction into a structured workflow definition.
-
-### Example
-
-A business user submits:
-
-"Whenever a new invoice arrives, verify the vendor, compare the invoice amount against the purchase order, flag discrepancies above 5%, and request manager approval before making corrections."
-
-AgentForge processes the request through the following stages:
-
-1. **Requirement Interpretation**
-   - Parse the user's instruction using an LLM.
-   - Identify triggers, conditions, actions, and approval requirements.
-
-2. **Workflow Generation**
-   - Generate a structured workflow definition.
-   - Represent workflow steps as nodes and dependencies.
-
-3. **Workflow Validation**
-   - Validate generated steps against supported operations.
-   - Check schemas, dependencies, and required permissions.
-
-4. **Workflow Execution**
-   - Execute deterministic operations through backend tools.
-   - Invoke AI reasoning only when necessary.
-
-5. **Human Approval**
-   - Pause execution before sensitive actions.
-   - Resume or reject the workflow based on authorized user input.
-
-6. **Monitoring and Auditing**
-   - Record execution status, tool calls, and outcomes.
-   - Provide visibility into failures and completed actions.
-
-## 4. Planned Features
-
-### AI Workflow Generation
-
-- Convert natural-language requirements into workflow definitions.
-- Generate structured JSON using LLM outputs.
-- Validate workflows using Pydantic models.
-- Reject unsupported or unsafe operations.
-
-### Visual Workflow Designer
-
-- Display workflows as interactive node-based diagrams.
-- Show triggers, conditions, AI operations, and actions.
-- Inspect individual workflow steps.
-- View execution progress.
-
-### Stateful Agent Orchestration
-
-- Coordinate workflow steps using LangGraph.
-- Maintain execution state across multiple operations.
-- Support conditional execution paths.
-- Pause and resume workflows.
-
-### Enterprise Integration Layer
-
-The MVP will use local business data and simulated integrations.
-
-Planned capabilities include:
-
-- PostgreSQL data operations
-- REST API tool execution
-- Invoice and purchase-order validation
-- Notification generation
-- Extensible connector interfaces
-
-### Human-in-the-Loop Execution
-
-- Require approval before sensitive operations.
-- Record approval decisions.
-- Prevent unauthorized workflow modifications.
-- Maintain execution history.
-
-### Monitoring and Reliability
-
-- Track workflow execution status.
-- Record structured execution logs.
-- Implement idempotency for state-changing operations.
-- Handle transient failures through bounded retries.
-- Expose execution history and error details.
-
-## 5. Technology Stack
-
-| Layer | Technology |
-|---|---|
-| Frontend | Next.js, React, TypeScript |
-| Styling | Tailwind CSS |
-| Workflow Visualization | React Flow |
-| Backend | Python, FastAPI |
-| Validation | Pydantic |
-| AI Orchestration | LangGraph |
-| LLM | Gemini API |
-| Database | PostgreSQL |
-| ORM | SQLAlchemy |
-| Database Migrations | Alembic |
-| Background Tasks | Celery, Redis (if required) |
-| Observability | OpenTelemetry |
-| Containerization | Docker, Docker Compose |
-| CI/CD | GitHub Actions |
-| Testing | Pytest, React Testing Library |
-
-## 6. System Architecture
-
-The planned architecture separates workflow generation, validation, orchestration, and execution.
-
-```text
-                    Business User
-                         |
-                         v
-                Next.js Frontend
-                         |
-                         v
-                   FastAPI API
-                         |
-            +------------+------------+
-            |                         |
-            v                         v
-     Workflow Generator        Workflow Management
-        (LLM API)                    |
-            |                         |
-            v                         |
-     Structured Workflow JSON        |
-            |                         |
-            +------------+------------+
-                         |
-                         v
-                 Workflow Validator
-                         |
-                         v
-                LangGraph Orchestrator
-                         |
-             +-----------+-----------+
-             |           |           |
-             v           v           v
-         Database     AI Tools    REST Tools
-             |           |           |
-             +-----------+-----------+
-                         |
-                         v
-                  Approval Gate
-                         |
-                         v
-                  Action Executor
-                         |
-                         v
-                 PostgreSQL Audit Log
-                         |
-                         v
-                 Monitoring Dashboard
-```
-
-### Architectural Principles
-
-**Separation of concerns:** AI generates and interprets workflows, while backend services validate and execute them.
-
-**Least privilege:** Tools expose only approved operations and enforce access controls.
-
-**Deterministic execution:** Business rules and critical data modifications remain under application control.
-
-**Recoverability:** Workflow execution state is persisted to support retries and recovery.
-
-**Auditability:** Significant decisions and state changes are recorded.
-
-## 7. Initial Business Use Case
-
-### AI-Powered Invoice Exception Management
-
-The first version of AgentForge will focus on automating invoice verification.
-
-#### Input Data
-
-The system will use synthetic datasets containing:
-
-- Vendors
-- Purchase orders
-- Invoices
-- Invoice line items
-- Payment statuses
-- Approval records
-
-#### Example Workflow
-
-1. Receive a new invoice.
-2. Retrieve the corresponding purchase order.
-3. Validate the vendor identity.
-4. Compare invoice and purchase-order amounts.
-5. Calculate the discrepancy percentage.
-6. Flag discrepancies above the configured threshold.
-7. Generate an AI-assisted explanation.
-8. Request manager approval.
-9. Execute an approved corrective action.
-10. Record the outcome in the audit log.
-
-#### Expected Outcome
-
-Demonstrate how AI can assist with exception investigation while maintaining controlled execution, reliable state transitions, and human oversight.
-
-## 8. Example Workflow Definition
-
-AgentForge will use a structured workflow representation.
-
-```json
-{
-  "name": "Invoice Exception Review",
-  "trigger": {
-    "type": "invoice.created"
-  },
-  "steps": [
-    {
-      "id": "validate_invoice",
-      "type": "tool",
-      "tool": "invoice.validate"
-    },
-    {
-      "id": "check_discrepancy",
-      "type": "condition",
-      "operator": "greater_than",
-      "field": "discrepancy_percentage",
-      "value": 5
-    },
-    {
-      "id": "investigate",
-      "type": "ai",
-      "tool": "invoice.investigate"
-    },
-    {
-      "id": "manager_approval",
-      "type": "approval",
-      "role": "manager"
-    },
-    {
-      "id": "execute_action",
-      "type": "tool",
-      "tool": "invoice.apply_approved_action"
-    }
-  ]
-}
-```
-
-This is an illustrative format. The final schema will include explicit step dependencies, branching rules, input mappings, and validation constraints.
-
-## 9. Planned Repository Structure
-
-```text
-agentforge/
-|
-|-- frontend/
-|   |-- src/
-|   |   |-- app/
-|   |   |-- components/
-|   |   |-- features/
-|   |   |-- lib/
-|   |   `-- types/
-|   |-- package.json
-|   `-- tsconfig.json
-|
-|-- backend/
-|   |-- app/
-|   |   |-- api/
-|   |   |-- agents/
-|   |   |-- core/
-|   |   |-- db/
-|   |   |-- models/
-|   |   |-- schemas/
-|   |   |-- services/
-|   |   `-- tools/
-|   |-- alembic/
-|   |-- tests/
-|   `-- pyproject.toml
-|
-|-- data/
-|   `-- synthetic/
-|
-|-- docs/
-|   `-- PROJECT_DOCUMENTATION.md
-|
-|-- .github/
-|   `-- workflows/
-|
-|-- docker-compose.yml
-|-- .env.example
-|-- .gitignore
-|-- LICENSE
-`-- README.md
-```
-
-The repository structure will evolve as implementation progresses.
-
-## 10. API Design
-
-The backend will expose REST endpoints for workflow management and execution.
-
-### Planned Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| POST | `/api/v1/workflows/generate` | Generate workflow from text |
-| POST | `/api/v1/workflows` | Save validated workflow |
-| GET | `/api/v1/workflows` | List workflows |
-| GET | `/api/v1/workflows/{id}` | Retrieve workflow |
-| POST | `/api/v1/workflows/{id}/execute` | Start execution |
-| GET | `/api/v1/executions/{id}` | Get execution status |
-| GET | `/api/v1/executions/{id}/events` | Get execution history |
-| POST | `/api/v1/executions/{id}/approve` | Approve pending action |
-| POST | `/api/v1/executions/{id}/reject` | Reject pending action |
-| GET | `/health` | Health check |
-
-API contracts will be finalized during backend implementation.
-
-## 11. Reliability and Security
-
-AgentForge is designed around controlled execution.
-
-Planned safeguards include:
-
-- Pydantic validation for generated workflow definitions
-- Tool allowlisting
-- Backend-enforced authorization
-- Approval gates for sensitive operations
-- Idempotency keys for state-changing actions
-- Bounded retries with backoff
-- Transactional database updates
-- Structured audit logs
-- Environment-based secret management
-- Safe handling of untrusted AI output
-
-LLM-generated instructions will never be executed directly as arbitrary Python or shell commands.
-
-## 12. Testing and Evaluation
-
-The project will include automated tests and AI evaluation scenarios.
-
-### Backend Testing
-
-- API contract validation
-- Database operation tests
-- Workflow state transition tests
-- Idempotency tests
-- Retry and recovery tests
-- Approval authorization tests
-
-### AI Evaluation
-
-- Natural-language requirement interpretation
-- Workflow schema validity
-- Tool selection correctness
-- Unsupported-action rejection
-- Business rule adherence
-- Investigation explanation quality
-
-### Initial Evaluation Targets
-
-| Metric | Target |
-|---|---|
-| Workflow schema validity | 95% or higher |
-| Correct tool selection | 90% or higher |
-| Unauthorized actions in tests | 0 |
-| Duplicate state changes in retry tests | 0 |
-| Critical workflow integration tests | 100% passing |
-
-These are development targets, not achieved benchmark results.
-
-## 13. Development Roadmap
-
-### Phase 1: Foundation — Days 1–2
-
-- Initialize repository structure.
-- Configure FastAPI.
-- Set up PostgreSQL and SQLAlchemy.
-- Implement Alembic migrations.
-- Create synthetic invoice datasets.
-- Define workflow JSON schema.
-
-### Phase 2: Workflow Engine — Days 3–4
-
-- Implement workflow validation.
-- Build deterministic workflow execution.
-- Implement workflow state transitions.
-- Persist execution history.
-
-### Phase 3: AI Integration — Days 5–6
-
-- Integrate Gemini API.
-- Implement natural-language workflow generation.
-- Add LangGraph orchestration.
-- Introduce approved tool interfaces.
-- Add AI output validation.
-
-### Phase 4: Frontend — Days 7–8
-
-- Build Next.js application.
-- Implement workflow creation UI.
-- Add React Flow visualization.
-- Build execution dashboard.
-- Add approval interface.
-
-### Phase 5: Reliability and Deployment — Days 9–10
-
-- Implement retries and idempotency.
-- Add integration tests.
-- Add structured logging and basic tracing.
-- Configure Docker Compose.
-- Deploy application.
-- Configure CI pipeline.
-
-### Phase 6: Finalization — Day 10.5
-
-- Run evaluation scenarios.
-- Document results.
-- Capture demo screenshots.
-- Record demonstration video.
-- Finalize architecture documentation.
-
-## 14. Local Development
-
-Local setup instructions will be added as the backend and frontend are implemented.
-
-### Prerequisites
-
-Planned development requirements:
-
-- Python 3.11+
-- Node.js 20+
-- Docker and Docker Compose
-- PostgreSQL
-- Gemini API key
-
-### Planned Quick Start
-
-```bash
-git clone https://github.com/YOUR_USERNAME/agentforge.git
-cd agentforge
-```
-
-Once the Docker environment is implemented, the intended startup command will be:
-
-```bash
-docker compose up --build
-```
-
-The application URLs and environment variables will be documented after the initial implementation.
-
-## 15. Project Goals
-
-AgentForge is being developed to explore the intersection of:
-
-- Forward-deployed software engineering
-- Enterprise automation
-- Applied AI engineering
-- Agentic workflows
-- Backend systems design
-- API integration
-- Reliability engineering
-- Human-centered AI operations
-
-The objective is not simply to generate AI responses, but to build a system capable of converting business requirements into controlled, observable software operations.
-
-## 16. Future Improvements
-
-Potential extensions beyond the initial MVP:
-
-- OAuth-based third-party integrations
-- Salesforce and accounting platform connectors
-- Multi-tenant organization support
-- Role-based access control
-- Workflow versioning
-- Scheduled workflow execution
-- Advanced observability dashboards
-- Workflow evaluation and optimization
-- Natural-language workflow editing
-- More complex branching and parallel execution
-
-These features are outside the initial MVP scope.
-
-## 17. Documentation
-
-Detailed technical documentation will be maintained in:
-
-[Project Documentation](docs/PROJECT_DOCUMENTATION.md)
-
-It will cover database schemas, workflow contracts, agent architecture, API specifications, testing strategy, security considerations, and implementation decisions.
-
-## 18. License
-
-License to be determined.
+## How it is used
+
+**Company user** (a finance team member)
+1. Signs in to the **Company portal** and adds an invoice by typing it in or extracting it from a text PDF.
+2. Runs a review workflow. Business rules compare the invoice with its purchase order.
+3. If it matches, the run completes automatically. If not, Gemini writes a short investigation with a risk level and suggested action, and the run **pauses for a human decision**.
+4. Approves, rejects, or **escalates** the exception to an admin with a reason.
+
+**Admin**
+1. Signs in to the **Admin portal** and sees every company, run outcomes, and escalations.
+2. Decides escalated exceptions (the company can no longer act on them).
+3. **Overrides** a company's decision or **reopens** a closed case, always with a written reason. The original decision is never edited; the override is appended beside it.
+4. Reviews the **audit log**: who did what, when, across all companies.
 
 ---
 
-**AgentForge — Turning business intent into reliable AI-powered execution.**
+## Architecture
+
+```mermaid
+flowchart LR
+    Browser -->|"HttpOnly session cookie"| Next["Next.js 16<br/>pages + API proxy"]
+    Next -->|"Bearer token (server-side only)"| API["FastAPI"]
+    API --> Rules["Deterministic validation"]
+    API --> Engine["Workflow engine<br/>(steps, cursor, advisory locks)"]
+    Engine --> Rules
+    Engine --> AI["LangGraph → Gemini<br/>(schema-validated output)"]
+    Engine --> Approval["Approval gate<br/>(company user / admin)"]
+    API --> DB[("PostgreSQL<br/>tenants, runs, approvals,<br/>overrides, audit events")]
+    Engine --> DB
+```
+
+- **Frontend (Next.js 16, React 19, TypeScript).** Public homepage, two login pages, and two portals (`/company/*`, `/admin/*`). A server-side route handler proxies `/api/backend/*` to FastAPI. It holds the access token in an `HttpOnly; SameSite=Lax` cookie, injects it as a bearer token, ignores any `Authorization` header sent by the browser, and blocks cross-site state-changing requests. `proxy.ts` guards portal routes.
+- **Backend (FastAPI, SQLAlchemy 2, Alembic, Pydantic).** REST API with role-based dependencies and tenant scoping on every query. Requests for another company's records return `404`, not `403`, so their existence is not revealed.
+- **Workflow engine.** Executes a validated JSON workflow definition step by step (`invoice.validate` → condition → `invoice.investigate` → approval → `invoice.resolve`). Progress (step cursor, context, step results) is committed per step under a PostgreSQL advisory lock, so concurrent requests cannot advance the same run twice. Resolution refuses to run unless the *effective* decision is an approval.
+- **AI investigation.** A LangGraph node calls Gemini with structured output and validates it against a strict Pydantic schema. Only typed invoice facts and the deterministic validation result are sent, never database access. Provider errors are replaced with a generic message so credentials and request data never reach logs or the UI.
+- **Audit trail.** Every state change, decision, escalation, override, reopen, and invoice submission is an append-only `audit_events` row with the acting user (or the engine) and the company.
+
+### Data model (key tables)
+
+| Table | Purpose |
+|---|---|
+| `companies`, `users` | Tenants and accounts. Role is `admin` (no company) or `company` (exactly one company), enforced by a check constraint. |
+| `vendors`, `purchase_orders`, `invoices` | Business data. Invoices and purchase orders carry `company_id`. Duplicate invoice identity is unique **per company**. |
+| `workflows`, `workflow_executions`, `step_executions` | Workflow definitions and runs (status, cursor, context, idempotency key, escalation). |
+| `approval_requests` | The original human decision: who, when, approve/reject. Never modified after it is recorded. |
+| `decision_overrides` | Append-only admin overrides: admin, time, original decision, new decision, mandatory reason. |
+| `invoice_investigations` | Saved AI recommendations with the facts they were based on. |
+| `audit_events` | Append-only history with actor and company. |
+
+---
+
+## Security model
+
+- **Passwords:** salted `scrypt` (standard library), constant-time comparison. Unknown emails take the same time as wrong passwords.
+- **Sessions:** HS256 JWT, 8-hour expiry, signed with `AUTH_SECRET_KEY` (32+ characters; the server fails closed without it). The user is re-loaded on every request, so deactivating a user or bumping `token_version` revokes their tokens immediately.
+- **Token handling:** the token lives only in an `HttpOnly` cookie (`Secure` over HTTPS) and never reaches browser JavaScript.
+- **Authorization:** company users only ever see their company's rows. Only company users submit invoices; only admins create workflow templates, use `/admin/*`, override, or reopen. Escalated exceptions can only be decided by an admin.
+- **Demo accounts** are created by an explicit seed script from environment variables, flagged `is_demo`, and **refused at login when `APP_ENV=production`**. The seed script and the demo-data endpoint also refuse to run in production.
+- **CSRF:** `SameSite=Lax` cookie plus an `Origin` check on state-changing requests in the proxy.
+- **Idempotency:** workflow runs require an `Idempotency-Key`. Repeating a key with the same input returns the original run; reusing it with different input returns `409`. Duplicate decisions and overrides return `409`. Reopen is idempotent per source run.
+
+---
+
+## Run locally (Docker Compose)
+
+**Prerequisites:** Docker Desktop, and a Gemini API key from Google AI Studio.
+
+1. Copy the example environment file and fill it in:
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+   | Variable | Notes |
+   |---|---|
+   | `POSTGRES_PASSWORD` | Strong, URL-safe (letters, digits, `-`, `_`). |
+   | `GOOGLE_API_KEY`, `GEMINI_MODEL` | Default model `gemini-3.5-flash`. |
+   | `AUTH_SECRET_KEY` | Generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. |
+   | `APP_ENV` | `development` locally. `production` disables demo accounts and demo data. |
+   | `DEMO_ADMIN_EMAIL` / `DEMO_ADMIN_PASSWORD`, `DEMO_COMPANY_EMAIL` / `DEMO_COMPANY_PASSWORD`, `DEMO_COMPANY_NAME` | Local demo accounts. Choose your own; never reuse them in production. |
+   | `BACKEND_PORT` | Optional host port for the API (default `8000`; use e.g. `18000` if Windows reserves 8000). |
+
+2. Start the stack, apply migrations, and create the demo accounts:
+   ```powershell
+   docker compose up --build -d
+   docker compose exec backend alembic upgrade head
+   docker compose exec backend python -m app.db.seed_users
+   ```
+
+3. Open **http://localhost:3000**, sign in to the **Admin portal**, and choose **Load sample workspace** to create sample suppliers, purchase orders, invoices, and workflows for the demo company. Then sign in to the **Company portal** to review them.
+
+API docs (Swagger) are at `http://localhost:8000/docs` (or your `BACKEND_PORT`). PostgreSQL is only reachable inside the Compose network.
+
+```powershell
+docker compose logs --tail=50 backend frontend   # inspect logs
+docker compose down                              # stop; data is kept
+```
+
+Do not pass `-v` to `down` unless you intend to delete the database volume.
+
+---
+
+## API overview
+
+All endpoints except login and `/health` require a bearer token. Through the web app this is handled by the proxy and the session cookie.
+
+| Method | Endpoint | Who | Purpose |
+|---|---|---|---|
+| POST | `/api/v1/auth/login` | Anyone | Sign in to the `admin` or `company` portal |
+| GET | `/api/v1/auth/me` | Signed in | Current user and company |
+| GET / POST | `/api/v1/invoices` | Company (POST), both (GET, scoped) | List or submit invoices (`409` on duplicate) |
+| GET | `/api/v1/invoices/purchase-orders` | Both (scoped) | Purchase orders |
+| POST | `/api/v1/invoices/extract-pdf` | Company | Suggest fields from a text PDF (not saved, not sent to AI) |
+| GET | `/api/v1/invoices/{id}/validate` | Both (scoped) | Deterministic validation result |
+| GET / POST | `/api/v1/workflows` | Both (GET), admin (POST) | List or create workflow definitions |
+| POST | `/api/v1/workflows/{id}/execute` | Both (scoped) | Start a run; requires `Idempotency-Key` |
+| GET | `/api/v1/workflows/executions[/{id}[/audit]]` | Both (scoped) | Runs, run detail with decision record, run audit trail |
+| POST | `/api/v1/approvals/{execution_id}` | Company (own, not escalated), admin | Approve or reject |
+| POST | `/api/v1/approvals/{execution_id}/escalate` | Both (scoped) | Hand a pending decision to an admin (reason required) |
+| POST | `/api/v1/admin/executions/{id}/override` | Admin | Replace the effective decision (reason required) |
+| POST | `/api/v1/admin/executions/{id}/reopen` | Admin | Start a new linked run for the same invoice (reason required) |
+| GET | `/api/v1/admin/overview`, `/admin/companies`, `/admin/overrides` | Admin | Cross-company oversight |
+| GET | `/api/v1/activity` | Both (scoped) | Recent audit events with actors |
+| POST | `/api/v1/investigations/{invoice_id}` | Both (scoped) | Stand-alone AI investigation |
+| POST | `/api/v1/demo/setup` | Admin, non-production only | Load sample data |
+| GET | `/health` | Anyone | Liveness |
+
+Full request and response schemas are in Swagger at `/docs`.
+
+---
+
+## Testing
+
+```powershell
+# Unit tests (no database needed)
+cd backend
+.\.venv\Scripts\python.exe -m pytest -q
+
+# Full suite against a disposable PostgreSQL
+docker run -d --name agentforge-testdb -e POSTGRES_USER=agentforge -e POSTGRES_PASSWORD=testonly -e POSTGRES_DB=agentforge -p 127.0.0.1:55432:5432 postgres:16
+$env:DATABASE_URL = "postgresql+psycopg://agentforge:testonly@127.0.0.1:55432/agentforge"
+$env:RUN_DB_TESTS = "1"; $env:GOOGLE_API_KEY = "test-key"
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m pytest -q
+docker rm -f agentforge-testdb
+
+# Frontend
+cd ..\frontend
+npm run lint; npm run build
+```
+
+The backend suite (96 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+
+GitHub Actions runs migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL with mocked Gemini, then frontend lint and build. CI never uses a real Gemini key.
+
+---
+
+## Known limitations
+
+- **Synchronous AI calls.** A Gemini investigation runs inside the HTTP request (seconds, occasionally ~40 s). A background worker is not implemented.
+- **No recovery action for failed runs yet.** A run that fails (for example when Gemini is unavailable) can be reopened by an admin, but there is no in-place retry yet.
+- **Logout clears the cookie only.** A copied token stays valid until it expires (at most 8 hours) unless the user's `token_version` is bumped.
+- **No login rate limiting yet.**
+- **Text PDFs only.** Scanned PDFs need manual entry; there is no OCR.
+- **Lists show up to 100 records** and have no pagination.
+- **No payment tracking.** "Review approved" records a review status only; amounts and payments are never changed.
+
+The first four are scheduled for the next step.
+
+---
+
+## Roadmap
+
+- [x] Invoice intake, PDF extraction, per-company duplicate protection
+- [x] Deterministic validation and workflow engine with approval gate
+- [x] Gemini investigation with schema validation and safe failure handling
+- [x] Role-based authentication, multi-tenancy, escalation, auditable admin overrides and reopen
+- [x] Public homepage, Company portal, Admin portal, audit log
+- [ ] Hardening: login rate limiting, token revocation on logout, retryable AI failures, failed-run recovery
+- [ ] Deployment (frontend, backend, managed PostgreSQL) and production configuration
+- [ ] Architecture diagrams, screenshots, and demo walkthrough
+
+---
+
+## Further documentation
+
+- [Invoice intake and review](docs/INVOICE_INTAKE.md)
+
+## License
+
+See [LICENSE](LICENSE).
