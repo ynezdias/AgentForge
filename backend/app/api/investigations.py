@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user, visible_invoice
 from app.core.ai_config import ai_settings
 from app.db.session import get_db
-from app.models.business import Invoice, PurchaseOrder
+from app.models.business import PurchaseOrder
+from app.models.identity import User
 from app.models.investigation import InvoiceInvestigation
 from app.schemas.investigation import InvestigationResult
 from app.services.investigation_agent import investigation_graph
@@ -17,10 +19,9 @@ router = APIRouter(prefix="/api/v1/investigations", tags=["AI Investigations"])
 
 
 @router.post("/{invoice_id}")
-def investigate_invoice(invoice_id: uuid.UUID, db: Session = Depends(get_db)):
-    invoice = db.get(Invoice, invoice_id)
-    if invoice is None:
-        raise HTTPException(404, "Invoice not found")
+def investigate_invoice(invoice_id: uuid.UUID, db: Session = Depends(get_db),
+                        user: User = Depends(get_current_user)):
+    invoice = visible_invoice(db, user, invoice_id)
     po = db.get(PurchaseOrder, invoice.purchase_order_id)
     if po is None:
         raise HTTPException(404, "Purchase order not found")
