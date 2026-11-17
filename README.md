@@ -12,6 +12,8 @@ The design principle is a strict split of authority:
 | **AI investigation** (Gemini) | Advisory | Summarise the discrepancy, rate risk, recommend an action | Approve, reject, or change an invoice or payment |
 | **People** | Authoritative | Approve, reject, escalate; admins override or reopen with a reason | Erase an earlier decision |
 
+> **Live demo:** **https://agentforge-seven-sand.vercel.app** (frontend on Vercel). The backend on Render is being connected; until then, sign-in on the live site will not work.
+>
 > **Status:** Feature-complete and tested (backend, browser end-to-end, and a production rehearsal of the deployment image). Deployment configuration for Render and Vercel is in the repo; see [Deployment](#deployment).
 
 ---
@@ -131,6 +133,8 @@ Do not pass `-v` to `down` unless you intend to delete the database volume.
 
 Render hosts PostgreSQL and the FastAPI backend (`render.yaml` Blueprint); Vercel hosts the Next.js frontend. The backend container migrates the database on start and serves on the host's `PORT`. In a deployment, the backend only accepts requests carrying a shared `INTERNAL_API_TOKEN` that only the Vercel proxy holds, and Swagger is turned off. Step-by-step instructions, the smoke-test checklist, and operating notes are in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
+Live frontend: **https://agentforge-seven-sand.vercel.app** (Vercel project `agentforge`).
+
 ---
 
 ## API overview
@@ -236,7 +240,8 @@ GitHub Actions runs three jobs: (1) migrations, `alembic check` (model and migra
 - [x] Retryable AI failures, retry from the failed step, interrupted-run recovery
 - [x] Browser end-to-end tests for both portals, in CI
 - [x] Deployment configuration: Render Blueprint, container entrypoint, internal-token gate, production rehearsal
-- [ ] Live deployment on Render and Vercel
+- [x] Frontend live on Vercel: https://agentforge-seven-sand.vercel.app
+- [ ] Backend and database live on Render
 - [ ] Architecture diagrams, screenshots, and demo walkthrough
 
 ---
