@@ -1,0 +1,55 @@
+# Render Blueprint: AgentForge API + PostgreSQL.
+# New > Blueprint in the Render dashboard, then pick this repository.
+# Values marked `sync: false` are prompted for once and never stored in Git.
+
+databases:
+  - name: agentforge-db
+    databaseName: agentforge
+    user: agentforge
+    plan: free                 # Free databases expire after 30 days; upgrade to keep data.
+    postgresMajorVersion: "16"
+    ipAllowList: []            # No external connections; only Render services can reach it.
+
+services:
+  - type: web
+    name: agentforge-api
+    runtime: docker
+    rootDir: backend           # Builds backend/Dockerfile; the entrypoint migrates, then serves.
+    plan: free                 # Free services sleep when idle; the first request can take ~1 minute.
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: agentforge-db
+          property: connectionString
+      - key: AUTH_SECRET_KEY
+        generateValue: true    # Random 256-bit signing key for sessions.
+      - key: INTERNAL_API_TOKEN
+        sync: false            # Long random string; set the same value on Vercel.
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash
+      # "demo" = a hosted demo: demo accounts and sample data are allowed.
+      # "production" refuses demo accounts, sample data, and the fake AI provider;
+      # use BOOTSTRAP_ADMIN_* to create the first real admin instead.
+      - key: APP_ENV
+        value: demo
+      - key: TRUST_PROXY_HEADERS
+        value: "true"          # Safe only because INTERNAL_API_TOKEN restricts callers to the Vercel proxy.
+      - key: RECOVER_INTERRUPTED_ON_STARTUP
+        value: "true"
+      - key: ENABLE_API_DOCS
+        value: "false"
+      - key: ENABLE_DEMO_SETUP
+        value: "true"
+      - key: DEMO_COMPANY_NAME
+        value: DevForge
+      - key: DEMO_ADMIN_EMAIL
+        sync: false
+      - key: DEMO_ADMIN_PASSWORD
+        sync: false
+      - key: DEMO_COMPANY_EMAIL
+        sync: false
+      - key: DEMO_COMPANY_PASSWORD
+        sync: false

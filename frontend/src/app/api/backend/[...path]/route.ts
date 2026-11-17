@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE } from "@/lib/session";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
+// Shared with the backend so only this proxy can call it (set in production).
+const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN;
+// AI investigations can take tens of seconds (longer while retrying a busy model).
+export const maxDuration = 60;
 const FORWARDED_HEADERS = ["content-type", "idempotency-key"];
 type RouteContext = { params: Promise<{ path: string[] }> };
 
@@ -37,6 +41,7 @@ async function forward(request: NextRequest, apiPath: string, token?: string) {
   // Client address for sign-in throttling (the backend trusts it only when configured to).
   const forwardedFor = request.headers.get("x-forwarded-for");
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  if (INTERNAL_API_TOKEN) headers.set("x-internal-token", INTERNAL_API_TOKEN);
   const url = new URL(`/api/v1/${apiPath}`, BACKEND_URL);
   url.search = request.nextUrl.search;
   return fetch(url, {

@@ -12,7 +12,7 @@ The design principle is a strict split of authority:
 | **AI investigation** (Gemini) | Advisory | Summarise the discrepancy, rate risk, recommend an action | Approve, reject, or change an invoice or payment |
 | **People** | Authoritative | Approve, reject, escalate; admins override or reopen with a reason | Erase an earlier decision |
 
-> **Status:** Feature-complete for local use and fully tested locally. Not yet deployed. See [Roadmap](#roadmap) and [Known limitations](#known-limitations).
+> **Status:** Feature-complete and tested (backend, browser end-to-end, and a production rehearsal of the deployment image). Deployment configuration for Render and Vercel is in the repo; see [Deployment](#deployment).
 
 ---
 
@@ -127,6 +127,12 @@ Do not pass `-v` to `down` unless you intend to delete the database volume.
 
 ---
 
+## Deployment
+
+Render hosts PostgreSQL and the FastAPI backend (`render.yaml` Blueprint); Vercel hosts the Next.js frontend. The backend container migrates the database on start and serves on the host's `PORT`. In a deployment, the backend only accepts requests carrying a shared `INTERNAL_API_TOKEN` that only the Vercel proxy holds, and Swagger is turned off. Step-by-step instructions, the smoke-test checklist, and operating notes are in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
+---
+
 ## API overview
 
 All endpoints except login and `/health` require a bearer token. Through the web app this is handled by the proxy and the session cookie.
@@ -201,7 +207,7 @@ docker rm -f agentforge-e2edb
 
 The fake provider (`AI_PROVIDER=fake`) returns a fixed, schema-valid recommendation and simulates a "503 high demand" outage for invoice totals ending in `.13`. It is refused when `APP_ENV=production`.
 
-The backend suite (116 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, AI error classification, retry from the failed step, retry limits, interrupted-run recovery, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
+The backend suite (122 tests) covers validation rules, the workflow engine, idempotency races, advisory locking, approvals, AI success and failure paths (Gemini mocked), password hashing and token tampering, login and portal rules, sign-in throttling, logout revocation, AI error classification, retry from the failed step, retry limits, interrupted-run recovery, tenant isolation, escalation, overrides, and reopen. Database tests run inside a transaction that is rolled back.
 
 GitHub Actions runs three jobs: (1) migrations, `alembic check` (model and migration drift), and the full backend suite against an ephemeral PostgreSQL; (2) frontend lint and build; (3) the Playwright E2E suite against a full stack with the fake AI provider, uploading the report when a test fails. CI never uses a real Gemini key.
 
@@ -229,13 +235,15 @@ GitHub Actions runs three jobs: (1) migrations, `alembic check` (model and migra
 - [x] Sign-in throttling, server-side logout, browser security headers
 - [x] Retryable AI failures, retry from the failed step, interrupted-run recovery
 - [x] Browser end-to-end tests for both portals, in CI
-- [ ] Deployment (frontend, backend, managed PostgreSQL) and production configuration
+- [x] Deployment configuration: Render Blueprint, container entrypoint, internal-token gate, production rehearsal
+- [ ] Live deployment on Render and Vercel
 - [ ] Architecture diagrams, screenshots, and demo walkthrough
 
 ---
 
 ## Further documentation
 
+- [Deployment (Render + Vercel)](docs/DEPLOYMENT.md)
 - [Invoice intake and review](docs/INVOICE_INTAKE.md)
 
 ## License

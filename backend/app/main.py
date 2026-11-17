@@ -1,8 +1,10 @@
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from app.api.invoices import router as invoice_router
 from app.api.workflows import router as workflow_router
 from app.api.approvals import router as approval_router
@@ -29,7 +31,24 @@ async def lifespan(_app):
     yield
 
 
-app = FastAPI(title="AgentForge API", version="0.1.0", lifespan=lifespan)
+# Interactive docs are useful locally; a deployment can turn them off.
+_docs = os.environ.get("ENABLE_API_DOCS", "true").lower() == "true"
+app = FastAPI(title="AgentForge API", version="0.1.0", lifespan=lifespan,
+              docs_url="/docs" if _docs else None, redoc_url="/redoc" if _docs else None,
+              openapi_url="/openapi.json" if _docs else None)
+
+
+@app.middleware("http")
+async def require_internal_token(request: Request, call_next):
+    """When INTERNAL_API_TOKEN is set, only the frontend proxy (which holds the
+    token) may call the API. This keeps the public backend URL from being used
+    directly, and is what makes a forwarded client IP trustworthy."""
+    expected = os.environ.get("INTERNAL_API_TOKEN", "")
+    if expected and request.url.path != "/health":
+        supplied = request.headers.get("x-internal-token", "")
+        if not secrets.compare_digest(supplied.encode(), expected.encode()):
+            return JSONResponse({"detail": "Not found"}, status_code=404)
+    return await call_next(request)
 
 app.include_router(auth_router)
 app.include_router(invoice_router)
